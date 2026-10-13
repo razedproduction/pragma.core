@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### Added — M3 «Async-задачи и вертикальный срез»
+- `pragma_async`: `Executor::new(&pool, AsyncConfig)` — исполнитель на `async-task` поверх пула.
+  `spawn_async(fut) -> AsyncHandle<T>`: future исполняется на воркерах с приоритетом
+  `Background`; паника — `AsyncError::Panicked { task, message }`.
+- `Executor::unblock(f)`: синхронный I/O в ограниченном blocking-пуле (потоки по требованию,
+  `AsyncConfig::with_blocking_threads` / `with_blocking_capacity`); переполнение — сразу
+  `AsyncError::Overloaded`, вызывающий не ждёт (DECISIONS #23).
+- `AsyncHandle`: отмена сбросом, `detach()`, мост в кадр `poll_ready()`, `Future` для `.await`,
+  `wait()` вне работы пула (из воркера или кадра графа — `AsyncError::WouldBlock`, DECISIONS #25).
+- `AsyncError`: варианты `Overloaded`, `SpawnFailed`, `WouldBlock`, `Consumed`, `InvalidConfig`.
+- `pragma_jobs::Spawner` (`ThreadPool::spawner()`): `Weak`-ссылка на пул, `spawn_detached`,
+  `is_alive`, `in_pool_context` (DECISIONS #24).
+- Пример `examples/frame_sim` (член workspace, слой 5): 100k сущностей, 9 систем графа,
+  фоновая загрузка карты через `spawn_async` + `unblock`, хеш состояния на каждом тике;
+  `--verify 1,4` сверяет хеши на разном числе воркеров и времени загрузки (DECISIONS #26).
+- Тесты: `pragma_async/tests/executor.rs` (отмена на всех этапах со счётчиком `Drop`, паники,
+  blocking-пул, остановка пула/исполнителя), proptest и `#[ignore]`-стресс (`tests/prop.rs`);
+  `frame_sim/tests/determinism.rs`.
+- CI: шаг `frame_sim --verify 1,4` на Windows и Linux; ночной стресс `pragma_async`.
+- Фасад: `AsyncConfig`, `AsyncError`, `AsyncHandle`, `Executor` в `prelude` (feature `async`).
+
+### Changed — M3
+- `pragma_async::AsyncError::Panicked` получил поле `task` (контекст: `spawn_async` / `unblock`).
+- `pragma_jobs`: деструктор задачи, сброшенной без выполнения (остановка пула), больше не может
+  уронить останавливающий поток паникой — она перехватывается и пишется в лог.
+
 ### Added — M2 «Граф кадра»
 - `pragma_graph`: `FrameGraph::builder()` — задачи с `reads::<T>()` / `writes::<T>()` и явными
   `before`/`after`; режим `ordered` (конфликт упорядочивается порядком объявления).

@@ -45,4 +45,7 @@ pub mod prelude {
 
     #[cfg(feature = "graph")]
     pub use pragma_graph::{FrameGraph, GraphError, Resources, TaskContext};
+
+    #[cfg(feature = "async")]
+    pub use pragma_async::{AsyncConfig, AsyncError, AsyncHandle, Executor};
 }

@@ -23,3 +23,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Долгие тесты #[ignore]: 10^7 задач, случайные паники, 1..2N воркеров.
       - run: cargo test -p pragma_jobs --release --test stress -- --ignored
+      # Async: 200k задач со случайной отменой, паниками и blocking-вызовами, 1..2N воркеров.
+      - run: cargo test -p pragma_async --release --test prop -- --ignored

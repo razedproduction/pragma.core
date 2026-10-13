@@ -18,8 +18,8 @@ of it without each inventing their own thread pool.
 ## Status
 
 Pre-alpha. The workspace, CI, L0/L1 primitives, the work-stealing job system (M1) and the
-per-frame task graph (M2) are in place; async tasks and the `frame_sim` vertical slice are the
-next milestone. See the [roadmap](docs/roadmap.md).
+per-frame task graph (M2) and async tasks with the `frame_sim` vertical slice (M3) are in place;
+observability and tuning are the next milestone. See the [roadmap](docs/roadmap.md).
 
 ## Features (planned)
 
@@ -29,7 +29,8 @@ next milestone. See the [roadmap](docs/roadmap.md).
 | Sync primitives (latches, parking, counters, scoped tasks) | `pragma_sync` | ✅ M1 |
 | Work-stealing job system: `spawn`, `join`, `scope`, `parallel_for` | `pragma_jobs` | ✅ M1 |
 | Per-frame task graph with declared resource access | `pragma_graph` | ✅ M2 |
-| Async tasks for I/O and streaming | `pragma_async` | 📋 M3 |
+| Async tasks on the pool, bounded blocking pool for file I/O | `pragma_async` | ✅ M3 |
+| Vertical slice: 100k entities, 9-system graph, background load, per-tick state hash | `examples/frame_sim` | ✅ M3 |
 | Facade with feature flags and `prelude` | `pragma_core` | ✅ initial |
 
 ## Principles

@@ -437,3 +437,92 @@ fn pool_dropped_inside_its_own_job_does_not_hang() {
     // Последняя ссылка уходит внутри задачи; Drop не должен join-ить собственный поток.
     assert_eq!(handle.join().unwrap(), 1);
 }
+
+/// Сбросы помеченного значения: задача, отклонённая пулом, должна быть сброшена.
+struct DropFlag(Arc<AtomicUsize>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn spawner_runs_detached_jobs() {
+    let pool = pool(2);
+    let spawner = pool.spawner();
+    assert!(spawner.is_alive());
+    let counter = Arc::new(AtomicUsize::new(0));
+    for priority in [Priority::Frame, Priority::Normal, Priority::Background] {
+        for _ in 0..100 {
+            let c = Arc::clone(&counter);
+            spawner
+                .spawn_detached(priority, move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
+    }
+    drop(pool); // `Drain`: всё принятое доработает
+    assert_eq!(counter.load(Ordering::SeqCst), 300);
+}
+
+#[test]
+fn spawner_rejects_after_shutdown_and_drops_job() {
+    let pool = pool(1);
+    let spawner = pool.spawner();
+    drop(pool);
+    assert!(!spawner.is_alive());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let flag = DropFlag(Arc::clone(&drops));
+    let result = spawner.spawn_detached(Priority::Background, move || drop(flag));
+    assert!(matches!(result, Err(JobError::Cancelled { .. })));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn spawner_detached_panic_keeps_worker_alive() {
+    let pool = pool(1);
+    let spawner = pool.spawner();
+    spawner
+        .spawn_detached(Priority::Normal, || panic!("detached boom"))
+        .unwrap();
+    assert_eq!(pool.spawn(Priority::Normal, || 1).join(), Ok(1));
+}
+
+#[test]
+fn spawner_knows_pool_context() {
+    let pool = Arc::new(pool(1));
+    let spawner = pool.spawner();
+    assert!(!spawner.in_pool_context());
+    let inner = spawner.clone();
+    assert_eq!(
+        pool.spawn(Priority::Normal, move || inner.in_pool_context())
+            .join(),
+        Ok(true)
+    );
+    assert!(pool.scope(|_| spawner.in_pool_context()).unwrap());
+}
+
+#[test]
+fn spawner_racing_with_shutdown_never_loses_jobs() {
+    // Каждая задача либо исполнена, либо сброшена — ни одна не застревает в очереди
+    // остановленного пула.
+    for _ in 0..200 {
+        let pool = pool(2);
+        let spawner = pool.spawner();
+        let accounted = Arc::new(AtomicUsize::new(0));
+        let pusher = {
+            let accounted = Arc::clone(&accounted);
+            std::thread::spawn(move || {
+                for _ in 0..50 {
+                    let flag = DropFlag(Arc::clone(&accounted));
+                    let _ = spawner.spawn_detached(Priority::Background, move || drop(flag));
+                }
+            })
+        };
+        drop(pool);
+        pusher.join().unwrap();
+        assert_eq!(accounted.load(Ordering::SeqCst), 50);
+    }
+}

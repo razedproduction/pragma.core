@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples/*"]
 # Отдельный workspace cargo-fuzz (DECISIONS.md #20).
 exclude = ["fuzz"]
 
@@ -21,6 +21,7 @@ pragma_sync = { path = "crates/pragma_sync", version = "0.0.1" }
 pragma_jobs = { path = "crates/pragma_jobs", version = "0.0.1" }
 pragma_graph = { path = "crates/pragma_graph", version = "0.0.1" }
 pragma_async = { path = "crates/pragma_async", version = "0.0.1" }
+pragma_core = { path = "crates/pragma_core", version = "0.0.1" }
 
 # External - pure Rust only (see docs/reliability.md, deny.toml).
 crossbeam-deque = "0.8.8"

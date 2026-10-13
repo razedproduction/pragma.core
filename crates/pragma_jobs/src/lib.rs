@@ -41,6 +41,7 @@ mod handle;
 mod pool;
 mod priority;
 mod scope;
+mod spawner;
 
 pub use config::{PoolConfig, ShutdownPolicy};
 pub use error::{JobError, JobsError};
@@ -48,3 +49,4 @@ pub use handle::JobHandle;
 pub use pool::ThreadPool;
 pub use priority::{Grain, Priority};
 pub use scope::Scope;
+pub use spawner::Spawner;
