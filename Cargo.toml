@@ -33,6 +33,8 @@ tracing = "0.1.44"
 proptest = "1.12.0"
 criterion = "0.8.2"
 loom = "0.7.2"
+# Только эталон в бенчах pragma_jobs (DECISIONS.md #14).
+rayon = "1.11.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"

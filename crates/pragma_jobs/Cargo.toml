@@ -14,5 +14,14 @@ pragma_sync = { workspace = true }
 crossbeam-deque = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+rayon = { workspace = true }
+
+[[bench]]
+name = "jobs"
+harness = false
+
 [lints]
 workspace = true

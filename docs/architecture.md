@@ -47,28 +47,41 @@ L0  pragma_base     ошибки, Handle/HandlePool, Tick, tracing
 - Порядок поиска работы: своя очередь → injector → случайная жертва для кражи → короткий spin
   с `Backoff` → парковка. Пробуждение адресное: будим один спящий воркер на каждую новую задачу,
   а не всех сразу.
-- **Ожидание никогда не блокирует воркер вхолостую.** `join`/`scope`/`wait` на воркере
+- **Ожидание никогда не блокирует воркер вхолостую.** `join`/`scope`/`JobHandle::join`
   исполняют чужие задачи, пока ждут свою (help-while-wait). Это исключает дедлок вложенных
   `join` при любом числе потоков, включая один.
+- **Главный поток — временный участник пула.** На время `scope`/`join`/`JobHandle::join`
+  поток вне пула занимает один из 4 внешних слотов — собственную LIFO-очередь, видимую ворам
+  (DECISIONS #16). Иначе его подзадачи шли бы в FIFO-injector, и помощь в ожидании брала бы
+  самые старые задачи, наращивая стек. Слоты заняты — работаем через injector.
+- Сон и пробуждение: воркер, не нашедший работы, сначала крутится с `Backoff` (отмечен как
+  «ищущий»), затем регистрируется спящим и паркуется (`Parker`, таймаут-страховка 50 мс).
+  Новая задача будит одного спящего, только если нет ищущих.
+- `unsafe` для стирания лайфтайма задач `scope` и задач-на-стеке `join` (`StackSlot`, без
+  аллокации) живёт в `pragma_sync::scope` (DECISIONS #15); `pragma_jobs` — `forbid(unsafe_code)`.
 
-Планируемый API (уточняется в M1):
+API (M1):
 
 ```rust
 let pool = ThreadPool::new(PoolConfig::default())?;      // Result, не паника
 
-let (a, b) = pool.join(|| heavy_a(), || heavy_b());      // fork-join
+let (a, b) = pool.join(|| heavy_a(), || heavy_b())?;     // fork-join, Err при панике ветви
 
 pool.scope(|s| {                                         // задачи могут занимать ссылки
     for chunk in data.chunks_mut(1024) {
-        s.spawn(move || process(chunk));
+        s.spawn(move || process(chunk));                 // `s` — Copy, его можно захватить
     }
 })?;                                                      // Err, если задача запаниковала
 
-pool.parallel_for(&mut items, Grain::Auto, |item| item.update(dt));
+pool.parallel_for(&mut items, Grain::Auto, |item| item.update(dt))?;
+let total = pool.parallel_reduce(&items, Grain::Auto, |_, c| sum(c), |a, b| a + b)?;
 
 let handle = pool.spawn(Priority::Background, || bake_navmesh());
 let result = handle.join()?;                              // Result<T, JobError>
 ```
+
+`Grain::Auto` делит данные на ~128 чанков (не меньше 64 элементов) — разбиение зависит только
+от длины, а не от числа воркеров, поэтому `parallel_reduce` побитово воспроизводим (§6).
 
 ### 3.2 Приоритеты
 
@@ -80,6 +93,14 @@ let result = handle.join()?;                              // Result<T, JobError>
 
 Фоновые задачи **не должны** голодом задерживать кадр: лимит занятых воркеров плюс проверка
 очереди `Frame` между фоновыми задачами.
+
+- `Frame` и `Normal` — локальные очереди воркеров и свои injector-ы; `Background` — только
+  глобальная очередь. Лимит (`PoolConfig::with_background_limit`, по умолчанию половина
+  воркеров) считает воркеры, а не задачи: фоновая задача, ждущая другую фоновую, исполняет её
+  в счёт своего слота, поэтому лимит 1 не дедлочит.
+- Подзадачи `join`/`scope`/`parallel_*` наследуют приоритет текущей задачи; вне пула —
+  `Frame`; у фоновой задачи — `Normal` (иначе они упёрлись бы в лимит, который держит родитель).
+- Поток вне пула фоновые задачи не исполняет даже в ожидании.
 
 ### 3.3 Граф кадра (`pragma_graph`, M2)
 

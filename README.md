@@ -17,16 +17,16 @@ of it without each inventing their own thread pool.
 
 ## Status
 
-Pre-alpha. The workspace, CI and L0/L1 primitives are in place; the job system is the
-next milestone. See the [roadmap](docs/roadmap.md).
+Pre-alpha. The workspace, CI, L0/L1 primitives and the work-stealing job system (M1) are in
+place; the per-frame task graph is the next milestone. See the [roadmap](docs/roadmap.md).
 
 ## Features (planned)
 
 | Area | Crate | Status |
 |---|---|---|
 | Errors, generational handles, simulation ticks | `pragma_base` | ✅ initial |
-| Sync primitives (latches, backoff, cache padding) | `pragma_sync` | ✅ initial |
-| Work-stealing job system: `spawn`, `join`, `scope`, `parallel_for` | `pragma_jobs` | 🚧 M1 |
+| Sync primitives (latches, parking, counters, scoped tasks) | `pragma_sync` | ✅ M1 |
+| Work-stealing job system: `spawn`, `join`, `scope`, `parallel_for` | `pragma_jobs` | ✅ M1 |
 | Per-frame task graph with declared resource access | `pragma_graph` | 📋 M2 |
 | Async tasks for I/O and streaming | `pragma_async` | 📋 M3 |
 | Facade with feature flags and `prelude` | `pragma_core` | ✅ initial |
