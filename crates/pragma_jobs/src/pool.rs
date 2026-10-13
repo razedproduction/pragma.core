@@ -73,7 +73,7 @@ impl LocalQueues {
     fn drain(&self) {
         for lane in Lane::ALL {
             while let Some(job) = self.get(lane).pop() {
-                drop(job);
+                drop_job(job);
             }
         }
     }
@@ -124,6 +124,8 @@ pub(crate) struct Shared {
     searching: CachePadded<AtomicUsize>,
     background_active: CachePadded<AtomicUsize>,
     shutdown: AtomicBool,
+    /// Потоки пула завершены и `join`-ены: задачи в очередях больше никто не исполнит.
+    stopped: AtomicBool,
     policy: ShutdownPolicy,
     background_limit: usize,
 }
@@ -268,6 +270,15 @@ fn execute(job: Job, priority: Priority) {
     let _ = CURRENT_PRIORITY.try_with(|p| p.set(previous));
 }
 
+/// Сбрасывает невыполненную задачу. Деструктор захваченных значений (например, future
+/// отменённой async-задачи) — пользовательский код: его паника не должна уронить поток,
+/// который останавливает пул или планирует задачу.
+fn drop_job(job: Job) {
+    if panic::catch_unwind(AssertUnwindSafe(|| drop(job))).is_err() {
+        tracing::error!("panic while dropping a cancelled job");
+    }
+}
+
 fn steal_loop<T>(mut attempt: impl FnMut() -> Steal<T>) -> Option<T> {
     loop {
         match attempt() {
@@ -287,8 +298,26 @@ impl Shared {
         }
     }
 
-    fn is_shutdown(&self) -> bool {
+    pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Кладёт отсоединённую задачу, если пул ещё принимает работу; иначе сбрасывает её
+    /// (см. [`Spawner::spawn_detached`](crate::Spawner::spawn_detached)).
+    pub(crate) fn push_detached(self: &Arc<Self>, job: Job, priority: Priority) -> bool {
+        if self.is_shutdown() {
+            drop_job(job);
+            return false;
+        }
+        self.push(job, priority);
+        // Гонка с `Drop` пула, который уже `join`-ил потоки: пара к `fence` перед
+        // `drain_queues` в `Drop` — либо он увидит нашу задачу, либо мы увидим `stopped`.
+        fence(Ordering::SeqCst);
+        if self.stopped.load(Ordering::SeqCst) {
+            self.drain_queues();
+            return false;
+        }
+        true
     }
 
     /// Кладёт задачу в очередь и будит одного спящего воркера.
@@ -407,7 +436,7 @@ impl Shared {
     fn drain_queues(&self) {
         for priority in [Priority::Frame, Priority::Normal, Priority::Background] {
             while let Some(job) = steal_loop(|| self.injector(priority).steal()) {
-                drop(job);
+                drop_job(job);
             }
         }
         for slot in &self.external_slots {
@@ -415,6 +444,11 @@ impl Shared {
                 local.drain();
             }
         }
+    }
+
+    /// Поток вызывающего — воркер этого пула или внешний поток внутри `scope`/`join`.
+    pub(crate) fn in_context(self: &Arc<Self>) -> bool {
+        current_worker_of(self).is_some()
     }
 }
 
@@ -728,6 +762,7 @@ impl ThreadPool {
             searching: CachePadded::new(AtomicUsize::new(0)),
             background_active: CachePadded::new(AtomicUsize::new(0)),
             shutdown: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
             policy: config.shutdown(),
             background_limit: config.background_limit(),
         });
@@ -780,6 +815,11 @@ impl Drop for ThreadPool {
             if handle.join().is_err() {
                 tracing::error!("pragma worker thread terminated with a panic");
             }
+        }
+        if joined_all {
+            self.shared.stopped.store(true, Ordering::SeqCst);
+            // Пара к `fence` в `Shared::push_detached`.
+            fence(Ordering::SeqCst);
         }
         if joined_all || self.shared.policy == ShutdownPolicy::Cancel {
             self.shared.drain_queues();

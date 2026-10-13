@@ -12,6 +12,7 @@ pragma_jobs = 2   # пул потоков, work-stealing, join/scope/parallel-fo
 pragma_graph = 3  # граф задач кадра
 pragma_async = 3  # async-задачи (I/O) поверх пула
 pragma_core = 4   # фасад: re-export, prelude, feature-флаги
+frame_sim = 5     # пример-вертикальный срез (examples/), только через фасад
 
 [allow]
 
