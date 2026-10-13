@@ -13,7 +13,14 @@ python tools/audit_workspace.py .
 
 ```bash
 cargo +nightly miri test -p pragma_sync
-RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release
+RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests
+```
+
+Если менялся `pragma_jobs` — долгие стресс-тесты (в CI — ночью) и бенчи против `rayon`:
+
+```bash
+cargo test -p pragma_jobs --release --test stress -- --ignored
+cargo bench -p pragma_jobs
 ```
 
 ## Контракт модуля

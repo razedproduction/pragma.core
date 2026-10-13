@@ -19,6 +19,7 @@
 ## 2. Ошибки
 
 - Один публичный `enum Error` на крейт, `#[non_exhaustive]`, через `thiserror`.
+  Исключение: `pragma_jobs` — `JobsError` (пул) и `JobError` (исход задачи), DECISIONS #13.
 - Ошибка несёт контекст: имя задачи, имя потока, индекс и поколение хэндла.
 - `anyhow` — только в примерах и инструментах.
 - Ошибки, повторяющиеся каждый кадр, логируются **один раз** (дедупликация по ключу).
@@ -30,7 +31,9 @@
   комментарий `// SAFETY:` на каждый блок с объяснением, почему инвариант выполняется.
 - Тесты `pragma_sync` гоняются под Miri (`cargo +nightly miri test -p pragma_sync`).
 - Каждый атомарный протокол (парковка, латчи, счётчики графа) получает loom-модель:
-  `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release`.
+  `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests` (модели — в
+  `crates/pragma_sync/tests/loom.rs`). loom моделирует `SeqCst` как `AcqRel`, поэтому протоколы
+  строятся на RMW-операциях, а не на «Dekker через SeqCst-load» (см. `AtomicCounter`).
 - Новый `unsafe` вне `pragma_sync` — только через запись в `DECISIONS.md`.
 
 ## 4. Деградация вместо падения
@@ -75,6 +78,9 @@
 6. `cargo deny check`: лицензии, advisories, запрещённые C-крейты
 7. `tools/audit_workspace.py`: чистота и слои
 8. Miri и loom для `pragma_sync`
+
+Ночью ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)): стресс-тесты
+`pragma_jobs` (`--ignored`) на Windows и Linux.
 
 Добавляется по вехам: `cargo hack --each-feature` (M2), бенч-гейт и `cargo-semver-checks` (M5),
 nightly-fuzz по расписанию (M5).

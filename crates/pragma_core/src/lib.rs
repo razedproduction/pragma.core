@@ -41,5 +41,5 @@ pub mod prelude {
     pub use pragma_sync::CountLatch;
 
     #[cfg(feature = "jobs")]
-    pub use pragma_jobs::PoolConfig;
+    pub use pragma_jobs::{Grain, JobError, JobHandle, PoolConfig, Priority, Scope, ThreadPool};
 }

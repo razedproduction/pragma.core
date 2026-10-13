@@ -1,0 +1,130 @@
+//! Стресс-тесты (долгие): `cargo test -p pragma_jobs --release --test stress -- --ignored`.
+//! В CI — ночной workflow `.github/workflows/nightly.yml`.
+// Тестовый код: паника = провал теста, переполнение исключено размерами входа.
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+use pragma_jobs::{Grain, JobError, PoolConfig, Priority, ThreadPool};
+
+fn worker_counts() -> Vec<usize> {
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    let mut counts = vec![1, 2, cores, 2 * cores];
+    counts.dedup();
+    counts
+}
+
+/// Дешёвый детерминированный генератор, чтобы паники были «случайными», но воспроизводимыми.
+fn hash(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x
+}
+
+#[test]
+#[ignore = "долгий: 10^7 задач"]
+fn ten_million_tiny_tasks() {
+    const TASKS: u64 = 10_000_000;
+    const PER_SCOPE: u64 = 10_000;
+    for workers in worker_counts() {
+        let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
+        let sum = AtomicU64::new(0);
+        for batch in 0..TASKS / PER_SCOPE {
+            pool.scope(|s| {
+                for i in 0..PER_SCOPE {
+                    let sum = &sum;
+                    s.spawn(move || {
+                        sum.fetch_add(batch * PER_SCOPE + i, Ordering::Relaxed);
+                    });
+                }
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            sum.load(Ordering::Relaxed),
+            TASKS * (TASKS - 1) / 2,
+            "workers={workers}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "долгий: случайные паники во вложенных join/scope"]
+fn random_panics_never_hang_or_kill_workers() {
+    // Тысячи ожидаемых паник: не засоряем вывод.
+    std::panic::set_hook(Box::new(|_| {}));
+    for workers in worker_counts() {
+        let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
+        let panics = AtomicUsize::new(0);
+        let oks = AtomicUsize::new(0);
+        for round in 0..2_000_u64 {
+            let r = pool.scope(|s| {
+                for i in 0..64_u64 {
+                    let pool = &pool;
+                    s.spawn(move || {
+                        let h = hash(round * 64 + i);
+                        let r = pool.join(
+                            || {
+                                assert!(!h.is_multiple_of(7), "left");
+                                h
+                            },
+                            || {
+                                assert!(!h.is_multiple_of(11), "right");
+                                h
+                            },
+                        );
+                        if r.is_err() {
+                            // Паника в одной ветви не мешает обработать результат другой.
+                        }
+                    });
+                }
+            });
+            match r {
+                Ok(()) => oks.fetch_add(1, Ordering::Relaxed),
+                Err(JobError::Panicked { .. }) => panics.fetch_add(1, Ordering::Relaxed),
+                Err(other) => panic!("unexpected {other}"),
+            };
+            let handle = pool.spawn(Priority::Background, move || {
+                assert!(!hash(round).is_multiple_of(3), "background");
+                round
+            });
+            match handle.join() {
+                Ok(v) => assert_eq!(v, round),
+                Err(JobError::Panicked { .. }) => {}
+                Err(other) => panic!("unexpected {other}"),
+            }
+        }
+        // Пул по-прежнему исправен.
+        let mut v = vec![1_u64; 100_000];
+        pool.parallel_for(&mut v, Grain::Auto, |x| *x += 1).unwrap();
+        assert!(v.iter().all(|&x| x == 2));
+        assert_eq!(
+            oks.load(Ordering::Relaxed) + panics.load(Ordering::Relaxed),
+            2_000
+        );
+    }
+}
+
+#[test]
+#[ignore = "долгий: многократное создание и уничтожение пула"]
+fn create_drop_cycles_do_not_leak_or_hang() {
+    for i in 0..500 {
+        let workers = 1 + i % 8;
+        let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
+        let handles: Vec<_> = (0..32)
+            .map(|j| pool.spawn(Priority::Normal, move || j * 2))
+            .collect();
+        if i % 2 == 0 {
+            for (j, h) in handles.into_iter().enumerate() {
+                assert_eq!(h.join().unwrap(), j * 2);
+            }
+        }
+        drop(pool);
+    }
+}

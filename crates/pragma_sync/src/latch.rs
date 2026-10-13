@@ -1,5 +1,6 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::PoisonError;
+
+use crate::primitives::{AtomicUsize, Condvar, Mutex, Ordering};
 
 /// Счётная защёлка: `wait` блокирует, пока счётчик не дойдёт до нуля.
 ///
@@ -15,7 +16,7 @@ pub struct CountLatch {
 impl CountLatch {
     /// Защёлка, ожидающая `count` вызовов [`count_down`](Self::count_down).
     #[must_use]
-    pub const fn new(count: usize) -> Self {
+    pub fn new(count: usize) -> Self {
         Self {
             remaining: AtomicUsize::new(count),
             lock: Mutex::new(()),
@@ -76,7 +77,7 @@ impl CountLatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use std::sync::Arc;

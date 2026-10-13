@@ -10,8 +10,11 @@ repository.workspace = true
 
 [dependencies]
 crossbeam-utils = { workspace = true }
+thiserror = { workspace = true }
 
-[target.'cfg(loom)'.dev-dependencies]
+# Под `--cfg loom` библиотека сама импортирует модели loom (src/primitives.rs), поэтому это
+# обычная зависимость; в сборках без флага она не активируется (DECISIONS.md #12).
+[target.'cfg(loom)'.dependencies]
 loom = { workspace = true }
 
 [lints]

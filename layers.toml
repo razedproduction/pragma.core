@@ -18,3 +18,4 @@ pragma_core = 4   # фасад: re-export, prelude, feature-флаги
 # Осознанно принятые исключения из правила «никакого C/C++» (DECISIONS.md #7).
 [purity.accepted]
 generator = "dev-only: loom (cfg(loom)) для модель-чекинга pragma_sync; в дерево пользователей не попадает"
+alloca = "dev-only: criterion 0.8 (бенчи pragma_jobs, DECISIONS.md #17); в дерево пользователей не попадает"
