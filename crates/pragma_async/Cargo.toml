@@ -1,0 +1,19 @@
+[package]
+name = "pragma_async"
+description = "pragma.core L3: async tasks (I/O, streaming) executed on the job pool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+pragma_base = { workspace = true }
+pragma_jobs = { workspace = true }
+async-task = { workspace = true }
+futures-lite = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

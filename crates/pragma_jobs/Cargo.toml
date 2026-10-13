@@ -1,0 +1,18 @@
+[package]
+name = "pragma_jobs"
+description = "pragma.core L2: work-stealing job system (pool, join, scope, parallel-for)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+pragma_base = { workspace = true }
+pragma_sync = { workspace = true }
+crossbeam-deque = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
