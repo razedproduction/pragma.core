@@ -1,0 +1,59 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+authors = ["razed <razed.production@yandex.ru>"]
+repository = "https://github.com/razedproduction/pragma.core"
+keywords = ["gamedev", "job-system", "scheduler", "multithreading", "runtime"]
+categories = ["game-development", "concurrency"]
+
+[workspace.dependencies]
+# Internal crates (versioned so cargo-deny/publishing never see wildcards).
+pragma_base = { path = "crates/pragma_base", version = "0.0.1" }
+pragma_sync = { path = "crates/pragma_sync", version = "0.0.1" }
+pragma_jobs = { path = "crates/pragma_jobs", version = "0.0.1" }
+pragma_graph = { path = "crates/pragma_graph", version = "0.0.1" }
+pragma_async = { path = "crates/pragma_async", version = "0.0.1" }
+
+# External - pure Rust only (see docs/reliability.md, deny.toml).
+crossbeam-deque = "0.8.8"
+crossbeam-utils = "0.8.23"
+crossbeam-channel = "0.5.17"
+async-task = "4.7.1"
+futures-lite = "2.6.1"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+
+# Dev / verification.
+proptest = "1.12.0"
+criterion = "0.8.2"
+loom = "0.7.2"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "warn"
+dbg_macro = "deny"
+undocumented_unsafe_blocks = "deny"
+arithmetic_side_effects = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+debug = true

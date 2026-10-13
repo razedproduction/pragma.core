@@ -1,0 +1,28 @@
+[package]
+name = "pragma_core"
+description = "Solid, high-performance multithreaded core in pure Rust for game engines and frameworks"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["jobs", "graph", "async"]
+jobs = ["dep:pragma_jobs"]
+graph = ["jobs", "dep:pragma_graph"]
+async = ["jobs", "dep:pragma_async"]
+
+[dependencies]
+pragma_base = { workspace = true }
+pragma_sync = { workspace = true }
+pragma_jobs = { workspace = true, optional = true }
+pragma_graph = { workspace = true, optional = true }
+pragma_async = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Fuzzing artifacts (corpus is committed, crashes are not)
+/fuzz/target
+/fuzz/artifacts
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store

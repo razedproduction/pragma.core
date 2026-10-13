@@ -1,0 +1,20 @@
+# Слои workspace. Крейт может зависеть только от крейтов строго нижнего слоя.
+# Исключения — в [allow], каждое с записью в DECISIONS.md.
+# Проверяется: python tools/audit_workspace.py .
+
+# Крейты, в которых разрешён unsafe (под Miri + loom, см. docs/reliability.md).
+unsafe_allowed = ["pragma_sync"]
+
+[crates]
+pragma_base = 0   # ошибки, хэндлы, время/тики, логирование
+pragma_sync = 1   # примитивы синхронизации (единственное место для unsafe)
+pragma_jobs = 2   # пул потоков, work-stealing, join/scope/parallel-for
+pragma_graph = 3  # граф задач кадра
+pragma_async = 3  # async-задачи (I/O) поверх пула
+pragma_core = 4   # фасад: re-export, prelude, feature-флаги
+
+[allow]
+
+# Осознанно принятые исключения из правила «никакого C/C++» (DECISIONS.md #7).
+[purity.accepted]
+generator = "dev-only: loom (cfg(loom)) для модель-чекинга pragma_sync; в дерево пользователей не попадает"
