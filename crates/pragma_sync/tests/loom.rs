@@ -8,7 +8,7 @@
 use loom::sync::Arc;
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use loom::thread;
-use pragma_sync::{AtomicCounter, CountLatch, Parker};
+use pragma_sync::{ArrivalCounter, AtomicCounter, CountLatch, Parker};
 
 #[test]
 fn latch_releases_waiter() {
@@ -88,6 +88,38 @@ fn counter_wait_sees_last_decrement() {
         for t in threads {
             t.join().unwrap();
         }
+    });
+}
+
+#[test]
+fn last_arrival_sees_every_predecessor() {
+    // Граф кадра: две задачи-предшественника пишут свои данные (Relaxed — без собственной
+    // синхронизации) и прибывают; прибывший последним «запускает последователя» и обязан
+    // увидеть обе записи. Ровно один из двух — последний.
+    loom::model(|| {
+        let arrival = Arc::new(ArrivalCounter::new(2));
+        let data: Arc<[AtomicUsize; 2]> = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+        let threads: Vec<_> = (0..2)
+            .map(|i| {
+                let (arrival, data) = (Arc::clone(&arrival), Arc::clone(&data));
+                thread::spawn(move || {
+                    data[i].store(i + 1, Ordering::Relaxed);
+                    if arrival.arrive() {
+                        assert_eq!(data[0].load(Ordering::Relaxed), 1);
+                        assert_eq!(data[1].load(Ordering::Relaxed), 2);
+                        true
+                    } else {
+                        false
+                    }
+                })
+            })
+            .collect();
+        let last: usize = threads
+            .into_iter()
+            .map(|t| usize::from(t.join().unwrap()))
+            .sum();
+        assert_eq!(last, 1);
+        assert_eq!(arrival.remaining(), 0);
     });
 }
 

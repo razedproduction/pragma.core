@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Отдельный workspace cargo-fuzz (DECISIONS.md #20).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.1"

@@ -1,0 +1,29 @@
+# Fuzz-цели pragma.core (cargo-fuzz, nightly). Отдельный workspace: libFuzzer собирается
+# из C++ (`libfuzzer-sys`), поэтому в дерево пользователей и в аудит workspace не входит
+# (DECISIONS.md #20).
+#
+#   cargo +nightly fuzz run graph_build
+
+[package]
+name = "pragma_fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+pragma_graph = { path = "../crates/pragma_graph" }
+pragma_jobs = { path = "../crates/pragma_jobs" }
+
+[[bin]]
+name = "graph_build"
+path = "fuzz_targets/graph_build.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

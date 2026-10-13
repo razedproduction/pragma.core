@@ -11,7 +11,16 @@ repository.workspace = true
 [dependencies]
 pragma_base = { workspace = true }
 pragma_jobs = { workspace = true }
+pragma_sync = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "graph"
+harness = false
 
 [lints]
 workspace = true

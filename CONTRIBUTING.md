@@ -23,6 +23,14 @@ cargo test -p pragma_jobs --release --test stress -- --ignored
 cargo bench -p pragma_jobs
 ```
 
+Если менялся `pragma_graph` — бенч кадра и fuzz построителя (cargo-fuzz, nightly, Linux;
+отдельный workspace `fuzz/`). Тест «кадр без аллокаций» входит в обычный `cargo test`.
+
+```bash
+cargo bench -p pragma_graph
+cargo +nightly fuzz run graph_build -- -max_total_time=60
+```
+
 ## Контракт модуля
 
 Новый крейт или модуль считается готовым, когда у него есть:

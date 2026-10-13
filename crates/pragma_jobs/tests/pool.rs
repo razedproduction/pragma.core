@@ -397,6 +397,34 @@ fn external_waiter_helps_when_workers_are_busy() {
 }
 
 #[test]
+fn external_context_is_reused_across_pools() {
+    // Контекст внешнего слота кэшируется в потоке (DECISIONS #18): переключение между пулами,
+    // вложенный вход в другой пул и удаление пула не должны ни терять слоты, ни путать пулы.
+    let a = pool(2);
+    for round in 0..50_u32 {
+        let b = pool(1);
+        assert_eq!(a.join(|| round, || 1).unwrap(), (round, 1));
+        assert_eq!(b.join(|| 2, || round).unwrap(), (2, round));
+        let nested = a
+            .scope(|_| b.join(|| fib(&b, 10), || fib(&a, 10)).unwrap())
+            .unwrap();
+        assert_eq!(nested, (55, 55));
+        drop(b);
+        let mut v = vec![0_u32; 300];
+        a.parallel_for(&mut v, Grain::Fixed(7), |x| *x += round)
+            .unwrap();
+        assert!(v.iter().all(|&x| x == round));
+    }
+    // Все 4 внешних слота по-прежнему доступны: 4 внешних потока ждут одновременно.
+    let a = &a;
+    std::thread::scope(|ts| {
+        for _ in 0..4 {
+            ts.spawn(move || assert_eq!(fib(a, 15), 610));
+        }
+    });
+}
+
+#[test]
 fn pool_dropped_inside_its_own_job_does_not_hang() {
     let pool = Arc::new(pool(2));
     let inner = Arc::clone(&pool);

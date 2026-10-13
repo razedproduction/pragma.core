@@ -9,6 +9,7 @@
 //! |---|---|
 //! | [`CountLatch`] | Ждать N событий |
 //! | [`AtomicCounter`] | Счётчик задач группы; ждать нуля, помогая исполнять работу |
+//! | [`ArrivalCounter`] | «Последний из N прибывших продолжает» — счётчики зависимостей графа кадра |
 //! | [`Parker`] / [`Unparker`] | Сон простаивающего воркера и адресное пробуждение |
 //! | [`scope()`] / [`TaskScope`] / [`ScopedTask`] | Задачи с заимствованием стека (стирание лайфтайма) |
 //! | [`StackSlot`] | Задача области без аллокации (замыкание на стеке владельца) |
@@ -37,6 +38,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod arrival;
 mod counter;
 mod error;
 mod latch;
@@ -44,6 +46,7 @@ mod parker;
 mod primitives;
 mod scope;
 
+pub use arrival::ArrivalCounter;
 pub use counter::AtomicCounter;
 pub use crossbeam_utils::{Backoff, CachePadded};
 pub use error::SyncError;

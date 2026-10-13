@@ -34,7 +34,8 @@
   `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests` (модели — в
   `crates/pragma_sync/tests/loom.rs`). loom моделирует `SeqCst` как `AcqRel`, поэтому протоколы
   строятся на RMW-операциях, а не на «Dekker через SeqCst-load» (см. `AtomicCounter`).
-- Новый `unsafe` вне `pragma_sync` — только через запись в `DECISIONS.md`.
+- Новый `unsafe` вне `pragma_sync` — только через запись в `DECISIONS.md`. Единственное
+  исключение — считающий аллокатор в тесте `pragma_graph/tests/alloc.rs` (DECISIONS #19).
 
 ## 4. Деградация вместо падения
 
@@ -43,6 +44,8 @@
 | Паника в задаче | Перехват, ошибка из `join`/`scope`/хэндла; воркер жив |
 | ОС не дала создать поток | `JobsError::SpawnFailed`; пул стартует с меньшим числом воркеров, если включено `allow_partial`, иначе ошибка |
 | Цикл или неоднозначный порядок в графе | Ошибка `build()` с именами задач, до первого кадра |
+| Ошибка или паника задачи графа | Её последователи в кадре пропускаются, независимые ветви доработают; `run` вернёт ошибку задачи с наименьшим индексом |
+| Задача графа взяла необъявленный или занятый ресурс | `UndeclaredAccess` / `BorrowConflict` вместо гонки; слот, отравленный паникой, остаётся доступным |
 | Drop хэндла async-задачи | Отмена без утечек |
 | Зависание задачи | Watchdog в debug-сборках (M4): предупреждение в лог с именем задачи |
 
@@ -62,7 +65,8 @@
 | Модель-чекинг | `loom` | Атомарные протоколы `pragma_sync` | M1 |
 | UB | Miri | `pragma_sync`, а также тесты `pragma_jobs` в однопоточном режиме | M1 |
 | Стресс / soak | Длительные тесты `#[ignore]` | Миллионы задач, вложенные `join`, случайные паники | M1 |
-| Fuzz | `cargo-fuzz` | Построитель графа на произвольных описаниях | M2 |
+| Fuzz | `cargo-fuzz` (`fuzz/`, отдельный workspace) | Построитель графа на произвольных описаниях; тот же оракул — в proptest | M2 |
+| Аллокации | Считающий глобальный аллокатор (`pragma_graph/tests/alloc.rs`) | Кадр графа без аллокаций | M2 |
 | Детерминизм | Хеш состояния | 1/2/N воркеров | M5 |
 | Производительность | `criterion` | spawn/join, `parallel_for`, граф; сравнение с `rayon` | M1; гейт регрессии с M5 |
 
@@ -78,12 +82,14 @@
 6. `cargo deny check`: лицензии, advisories, запрещённые C-крейты
 7. `tools/audit_workspace.py`: чистота и слои
 8. Miri и loom для `pragma_sync`
+9. `cargo hack clippy --each-feature`: каждая фича фасада собирается отдельно
+10. Fuzz построителя графа, 60 с (`cargo +nightly fuzz run graph_build`, Linux)
 
 Ночью ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)): стресс-тесты
 `pragma_jobs` (`--ignored`) на Windows и Linux.
 
-Добавляется по вехам: `cargo hack --each-feature` (M2), бенч-гейт и `cargo-semver-checks` (M5),
-nightly-fuzz по расписанию (M5).
+Добавляется по вехам: бенч-гейт и `cargo-semver-checks` (M5), долгий nightly-fuzz по
+расписанию (M5).
 
 ## 8. Стабильность API
 

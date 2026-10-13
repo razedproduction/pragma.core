@@ -42,4 +42,7 @@ pub mod prelude {
 
     #[cfg(feature = "jobs")]
     pub use pragma_jobs::{Grain, JobError, JobHandle, PoolConfig, Priority, Scope, ThreadPool};
+
+    #[cfg(feature = "graph")]
+    pub use pragma_graph::{FrameGraph, GraphError, Resources, TaskContext};
 }
