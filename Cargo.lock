@@ -607,8 +607,11 @@ dependencies = [
 name = "pragma_graph"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "pragma_base",
  "pragma_jobs",
+ "pragma_sync",
+ "proptest",
  "thiserror",
 ]
 

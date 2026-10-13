@@ -28,6 +28,36 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps --all-features
 
+  features:
+    name: cargo hack --each-feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+      # Каждая фича фасада по отдельности (и без фич) собирается и проходит clippy.
+      - run: cargo hack clippy --workspace --each-feature --no-dev-deps -- -D warnings
+
+  fuzz:
+    name: fuzz (graph build, 60 s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # Отдельный workspace `fuzz/` (libFuzzer — C++, DECISIONS #20).
+      - run: cargo +nightly fuzz run graph_build -- -max_total_time=60
+        env:
+          RUSTFLAGS: ""
+
   msrv:
     name: MSRV (1.88)
     runs-on: ubuntu-latest

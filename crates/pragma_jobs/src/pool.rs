@@ -169,7 +169,7 @@ pub(crate) fn enter<R>(shared: &Arc<Shared>, f: impl FnOnce() -> R) -> R {
         return f();
     };
     let index = shared.unparkers.len().saturating_add(slot);
-    let ctx = Rc::new(WorkerCtx::new(Arc::clone(shared), index, local, true));
+    let (ctx, placeholder) = external_ctx(shared, index, local);
     let previous = WORKER
         .try_with(|cell| cell.replace(Some(ctx)))
         .ok()
@@ -177,16 +177,43 @@ pub(crate) fn enter<R>(shared: &Arc<Shared>, f: impl FnOnce() -> R) -> R {
     let _guard = ExternalGuard {
         shared,
         slot,
-        previous: Cell::new(previous),
+        previous,
+        placeholder,
     };
     f()
+}
+
+thread_local! {
+    /// Контекст внешнего слота от прошлого [`enter`] этого потока, с очередями-заглушками
+    /// вместо настоящих. Без него каждый вход главного потока в пул (раз в кадр) стоил бы
+    /// аллокации `Rc` (DECISIONS #18). Держит `Arc<Shared>` последнего пула до следующего
+    /// `enter` или выхода из потока: потоков пула это не задерживает, только память.
+    static SPARE_EXTERNAL: Cell<Option<Rc<WorkerCtx>>> = const { Cell::new(None) };
+}
+
+/// Контекст внешнего потока с очередями слота `local` и заглушка, которую он вернёт на их
+/// место при выходе (`None` — контекст новый, заглушку создаст [`ExternalGuard`]).
+fn external_ctx(
+    shared: &Arc<Shared>,
+    index: usize,
+    local: LocalQueues,
+) -> (Rc<WorkerCtx>, Option<LocalQueues>) {
+    if let Some(mut spare) = SPARE_EXTERNAL.try_with(Cell::take).ok().flatten()
+        && let Some(ctx) = Rc::get_mut(&mut spare)
+    {
+        let placeholder = ctx.reuse(shared, index, local);
+        return (spare, Some(placeholder));
+    }
+    let ctx = Rc::new(WorkerCtx::new(Arc::clone(shared), index, local, true));
+    (ctx, None)
 }
 
 /// Возвращает внешний слот и восстанавливает прежний контекст потока (и при панике).
 struct ExternalGuard<'a> {
     shared: &'a Shared,
     slot: usize,
-    previous: Cell<Option<Rc<WorkerCtx>>>,
+    previous: Option<Rc<WorkerCtx>>,
+    placeholder: Option<LocalQueues>,
 }
 
 impl Drop for ExternalGuard<'_> {
@@ -198,14 +225,21 @@ impl Drop for ExternalGuard<'_> {
         let Some(slot) = self.shared.external_slots.get(self.slot) else {
             return;
         };
-        match ctx.map(Rc::try_unwrap) {
-            // Оставшиеся в очереди задачи (например, `spawn` из тела `scope`) не теряются:
-            // очередь возвращается в слот, её по-прежнему видят воры.
-            Some(Ok(ctx)) => {
-                *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(ctx.local);
-            }
-            _ => tracing::error!("external pool slot context was not released; slot is lost"),
-        }
+        let Some(mut ctx) = ctx else {
+            tracing::error!("external pool slot context was not released; slot is lost");
+            return;
+        };
+        let Some(inner) = Rc::get_mut(&mut ctx) else {
+            tracing::error!("external pool slot context is still shared; slot is lost");
+            return;
+        };
+        // Оставшиеся в очереди задачи (например, `spawn` из тела `scope`) не теряются:
+        // очередь возвращается в слот, её по-прежнему видят воры. На её место встаёт
+        // заглушка, и контекст переиспользуется следующим `enter`.
+        let placeholder = self.placeholder.take().unwrap_or_else(LocalQueues::new);
+        let local = std::mem::replace(&mut inner.local, placeholder);
+        *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(local);
+        let _ = SPARE_EXTERNAL.try_with(|spare| spare.set(Some(ctx)));
     }
 }
 
@@ -420,19 +454,35 @@ struct WorkerCtx {
 
 impl WorkerCtx {
     fn new(shared: Arc<Shared>, index: usize, local: LocalQueues, external: bool) -> Self {
-        let seed = u64::try_from(index)
-            .unwrap_or(0)
-            .wrapping_add(1)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            | 1;
         Self {
             shared,
             index,
             local,
-            rng: Cell::new(seed),
+            rng: Cell::new(Self::seed(index)),
             holds_background: Cell::new(false),
             external,
         }
+    }
+
+    fn seed(index: usize) -> u64 {
+        u64::try_from(index)
+            .unwrap_or(0)
+            .wrapping_add(1)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            | 1
+    }
+
+    /// Перенастраивает кэшированный внешний контекст на слот `index` пула `shared`, как
+    /// новый; возвращает очереди-заглушку, стоявшие на месте `local`.
+    fn reuse(&mut self, shared: &Arc<Shared>, index: usize, local: LocalQueues) -> LocalQueues {
+        if !Arc::ptr_eq(&self.shared, shared) {
+            self.shared = Arc::clone(shared);
+        }
+        self.index = index;
+        self.rng.set(Self::seed(index));
+        self.holds_background.set(false);
+        self.external = true;
+        std::mem::replace(&mut self.local, local)
     }
 
     /// xorshift64: детерминированный выбор жертвы без системного RNG.
