@@ -1,10 +1,10 @@
 # pragma.core
 
 [![CI](https://github.com/razedproduction/pragma.core/actions/workflows/ci.yml/badge.svg)](https://github.com/razedproduction/pragma.core/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.6.0-informational)
+[![crates.io](https://img.shields.io/crates/v/pragma_core.svg)](https://crates.io/crates/pragma_core)
+[![docs.rs](https://img.shields.io/docsrs/pragma_core)](https://docs.rs/pragma_core)
 ![MSRV](https://img.shields.io/badge/MSRV-1.88-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Status](https://img.shields.io/badge/status-pre--1.0-yellow)
 
 **pragma.core** is a pure-Rust, solid and high-performance multithreaded core for
 razed.production's game engines and frameworks.
@@ -15,14 +15,12 @@ of it without each inventing their own thread pool.
 
 ## Status
 
-**0.6.0 — feature-complete for 1.0, public API reviewed.** Milestones M0–M5 are done: the
-work-stealing job system, the per-frame task graph, async tasks, observability, tuning and
-the hardening pass (determinism suite, benchmark gate and semver checks in CI). M6 is in
-progress: the 1.0 API review, the move of all documentation to English and the
-[MSRV](#msrv-policy) and [versioning](#versioning) policy, and complete rustdoc with examples
-and an embedding checklist are done; the crates.io release is next. Until 1.0, minor versions may break the
-API; every break is listed in the [changelog](CHANGELOG.md).
-See the [roadmap](docs/roadmap.md).
+**1.0.0 — stable.** All milestones M0–M6 are done: the work-stealing job system, the
+per-frame task graph, async tasks, observability, tuning, the hardening pass (determinism
+suite, benchmark gate and semver checks in CI), the 1.0 API review, complete rustdoc with
+an embedding checklist, and the [MSRV](#msrv-policy) and [versioning](#versioning) policy.
+The public API follows semver: breaking changes happen only in a major release, and every
+change is listed in the [changelog](CHANGELOG.md). See the [roadmap](docs/roadmap.md).
 
 ## Features
 
@@ -115,12 +113,13 @@ More examples are in the crate docs (`cargo doc --open -p pragma_core`) and in
 
 ## Using it
 
-pragma.core is not on crates.io yet (planned for 1.0). Depend on it via git:
-
 ```toml
 [dependencies]
-pragma_core = { git = "https://github.com/razedproduction/pragma.core" }
+pragma_core = "1.0"
 ```
+
+Depend on the `pragma_core` facade rather than on the individual `pragma_*` crates (see
+[Versioning](#versioning)).
 
 | Feature | Default | Enables |
 |---|---|---|
@@ -153,7 +152,7 @@ pragma.core follows [SemVer](https://semver.org/); the rules are in
 [docs/reliability.md §8](docs/reliability.md#8-api-stability).
 
 - **Lockstep.** All crates share one version (`version` in `[workspace.package]`, currently
-  0.6.0): the `pragma_core` facade exposes all of them, so separate versions would give users
+  1.0.0): the `pragma_core` facade exposes all of them, so separate versions would give users
   nothing ([DECISIONS #33](DECISIONS.md)). A breaking change in any crate is a breaking
   release of all of them.
 - **Exact internal dependencies.** The crates depend on each other with `=X.Y.Z`, so
@@ -233,7 +232,7 @@ is 1.88 ([MSRV policy](#msrv-policy)). See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 
 ## Documentation
 
-- API reference: `cargo doc --open -p pragma_core` (docs.rs after the crates.io release). Every
+- API reference: [docs.rs/pragma_core](https://docs.rs/pragma_core) (or `cargo doc --open -p pragma_core`). Every
   public type and free function has an example; the crate page of `pragma_core` has the section
   **"Integrating into an engine"**: pool ownership, the graph in the game loop, async results,
   priorities, panics, shutdown order and determinism

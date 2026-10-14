@@ -4,7 +4,14 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-10-14
+
+The first release on crates.io (DECISIONS #47). The public API is the one reviewed in 0.6.0; from
+now on breaking changes happen only in a major release.
+
 ### Changed
+
+- Version 1.0.0 for all crates; internal dependencies are `=1.0.0`.
 
 - All project documentation is now in English: rustdoc and code comments, test messages,
   `docs/`, `DECISIONS.md`, `CONTRIBUTING.md`, this changelog, CI comments, GitHub templates and the
@@ -14,6 +21,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
 
 ### Added
 
+- crates.io metadata: every crate has `keywords`, `categories`, its own `LICENSE` and a short
+  README (`pragma_core` uses the project README); `pragma_core`, `pragma_jobs` and `pragma_graph`
+  are documented on docs.rs with all features (`[package.metadata.docs.rs] all-features = true`).
 - README sections "MSRV policy" and "Versioning": MSRV 1.88, raised only in a minor release with
   a changelog line (DECISIONS #44); lockstep versions, exact internal dependencies, what is
   outside semver, how breaking changes are handled before and after 1.0. No API changes.
