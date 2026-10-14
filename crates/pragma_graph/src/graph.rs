@@ -2,7 +2,8 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use pragma_jobs::ThreadPool;
+use pragma_base::tracing;
+use pragma_jobs::{Priority, ThreadPool};
 use pragma_sync::ArrivalCounter;
 
 use crate::GraphError;
@@ -254,6 +255,9 @@ impl FrameGraph {
     /// ветви, но зависимые от неё задачи в этом кадре не запускаются; возвращается ошибка задачи
     /// с наименьшим индексом регистрации. В установившемся режиме не аллоцирует.
     pub fn run(&mut self, pool: &ThreadPool, resources: &mut Resources) -> Result<(), GraphError> {
+        let _span = tracing::debug_span!("frame_graph", tasks = self.nodes.len()).entered();
+        #[cfg(feature = "puffin")]
+        puffin::profile_scope!("frame_graph");
         for &(key, task) in &self.required {
             if !resources.contains_key(key) {
                 return Err(GraphError::MissingResource {
@@ -367,7 +371,18 @@ impl Run<'_> {
             pool: self.pool,
             resources: self.resources,
         };
-        match panic::catch_unwind(AssertUnwindSafe(|| (node.system)(&ctx))) {
+        // Поля span вычисляются, только если уровень DEBUG включён.
+        let _span = tracing::debug_span!(
+            "graph_task",
+            task = node.name.as_str(),
+            priority = pragma_jobs::current_priority().map(Priority::as_str),
+            worker = self.pool.current_worker_index(),
+        )
+        .entered();
+        #[cfg(feature = "puffin")]
+        puffin::profile_scope!("graph_task", node.name.as_str());
+        let system = || pragma_jobs::labeled("graph", &node.name, || (node.system)(&ctx));
+        match panic::catch_unwind(AssertUnwindSafe(system)) {
             Ok(Ok(())) => true,
             Ok(Err(error)) => {
                 self.record(index, error);

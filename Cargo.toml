@@ -18,6 +18,7 @@ categories = ["game-development", "concurrency"]
 # Internal crates (versioned so cargo-deny/publishing never see wildcards).
 pragma_base = { path = "crates/pragma_base", version = "0.0.1" }
 pragma_sync = { path = "crates/pragma_sync", version = "0.0.1" }
+pragma_sys = { path = "crates/pragma_sys", version = "0.0.1" }
 pragma_jobs = { path = "crates/pragma_jobs", version = "0.0.1" }
 pragma_graph = { path = "crates/pragma_graph", version = "0.0.1" }
 pragma_async = { path = "crates/pragma_async", version = "0.0.1" }
@@ -31,6 +32,11 @@ async-task = "4.7.1"
 futures-lite = "2.6.1"
 thiserror = "2.0.21"
 tracing = "0.1.44"
+# Профайлер кадра за feature `puffin` (DECISIONS.md #29). 0.20 требует Rust 1.92 > MSRV.
+puffin = { version = "0.19.1", default-features = false }
+# Системные FFI только в pragma_sys (DECISIONS.md #27).
+windows-sys = "0.61.2"
+libc = "0.2.190"
 
 # Dev / verification.
 proptest = "1.12.0"

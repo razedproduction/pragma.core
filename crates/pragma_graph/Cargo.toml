@@ -8,11 +8,16 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Кадр и задачи графа в профайлере puffin (DECISIONS.md #29).
+puffin = ["dep:puffin", "pragma_jobs/puffin"]
+
 [dependencies]
 pragma_base = { workspace = true }
 pragma_jobs = { workspace = true }
 pragma_sync = { workspace = true }
 thiserror = { workspace = true }
+puffin = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

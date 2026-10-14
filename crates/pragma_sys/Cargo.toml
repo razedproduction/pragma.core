@@ -1,0 +1,22 @@
+[package]
+name = "pragma_sys"
+description = "pragma.core L1: platform layer (thread names, priorities, affinity) over system FFI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+# Системные FFI-привязки без сборки C (DECISIONS.md #4, #27).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[lints]
+workspace = true

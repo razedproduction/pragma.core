@@ -2,10 +2,26 @@ use std::marker::PhantomData;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use pragma_base::tracing;
 use pragma_sync::{StackSlot, TaskScope};
 
 use crate::pool::{Job, Shared, enter, help_once, inherited_priority};
 use crate::{Grain, JobError, Priority, ThreadPool};
+
+/// Span `tracing` (уровень `TRACE`) и область puffin на время операции пула `$op`.
+/// Поля span вычисляются, только если уровень включён.
+macro_rules! observe {
+    ($pool:expr, $op:literal) => {
+        let _span = tracing::trace_span!(
+            $op,
+            priority = inherited_priority().as_str(),
+            worker = $pool.current_worker_index(),
+        )
+        .entered();
+        #[cfg(feature = "puffin")]
+        puffin::profile_scope!($op);
+    };
+}
 
 /// Данные области: всё заимствовано у `scope_named`, поэтому область не аллоцирует и не
 /// трогает общий для всех потоков счётчик ссылок `Arc<Shared>`.
@@ -69,7 +85,8 @@ impl<'scope> Scope<'scope, '_> {
     {
         let data: ScopeData<'scope> = *self.inner.data();
         let task = self.inner.task(move || {
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(f)) {
+            let labeled = || crate::labeled("scope", name, f);
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(labeled)) {
                 data.record(JobError::panicked(name, &*payload));
             }
         });
@@ -99,6 +116,7 @@ impl ThreadPool {
     where
         F: for<'scope> FnOnce(Scope<'scope, 'env>) -> R,
     {
+        observe!(self, "scope");
         self.scope_named("scope", f)
     }
 
@@ -181,6 +199,7 @@ impl ThreadPool {
         T: Send,
         F: Fn(usize, &mut [T]) + Sync,
     {
+        observe!(self, "parallel_for");
         let chunks = items.chunks_mut(grain.chunk_size(items.len()));
         let f = &f;
         self.scope_named("parallel_for", move |s| {
@@ -211,6 +230,7 @@ impl ThreadPool {
         M: Fn(usize, &[T]) -> R + Sync,
         C: FnMut(R, R) -> R,
     {
+        observe!(self, "parallel_reduce");
         let size = grain.chunk_size(items.len());
         let mut parts: Vec<Option<R>> = Vec::new();
         parts.resize_with(items.len().div_ceil(size), || None);

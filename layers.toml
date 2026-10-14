@@ -2,12 +2,14 @@
 # Исключения — в [allow], каждое с записью в DECISIONS.md.
 # Проверяется: python tools/audit_workspace.py .
 
-# Крейты, в которых разрешён unsafe (под Miri + loom, см. docs/reliability.md).
-unsafe_allowed = ["pragma_sync"]
+# Крейты, в которых разрешён unsafe (см. docs/reliability.md §3): pragma_sync — под Miri +
+# loom, pragma_sys — только системные FFI (DECISIONS.md #27).
+unsafe_allowed = ["pragma_sync", "pragma_sys"]
 
 [crates]
 pragma_base = 0   # ошибки, хэндлы, время/тики, логирование
-pragma_sync = 1   # примитивы синхронизации (единственное место для unsafe)
+pragma_sync = 1   # примитивы синхронизации (unsafe: стирание лайфтайма, контекст задачи)
+pragma_sys = 1    # платформенный слой: имена/приоритеты потоков, affinity (unsafe: FFI)
 pragma_jobs = 2   # пул потоков, work-stealing, join/scope/parallel-for
 pragma_graph = 3  # граф задач кадра
 pragma_async = 3  # async-задачи (I/O) поверх пула

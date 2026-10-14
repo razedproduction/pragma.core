@@ -14,6 +14,18 @@ pub enum Priority {
     Background,
 }
 
+impl Priority {
+    /// Имя приоритета для логов и метрик: `"frame"`, `"normal"`, `"background"`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Frame => "frame",
+            Self::Normal => "normal",
+            Self::Background => "background",
+        }
+    }
+}
+
 /// Способ разбиения данных на задачи в `parallel_*`.
 ///
 /// Разбиение зависит **только** от длины данных и `Grain`, но не от числа воркеров, поэтому

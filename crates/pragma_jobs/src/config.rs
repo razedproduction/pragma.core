@@ -1,6 +1,11 @@
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use crate::JobsError;
+use crate::sys::ThreadPriority;
+
+/// Порог watchdog по умолчанию (только debug-сборки, см. [`PoolConfig::with_watchdog`]).
+pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(5);
 
 /// Верхняя граница числа воркеров — защита от опечаток в конфиге.
 const MAX_WORKERS: usize = 512;
@@ -25,6 +30,9 @@ pub struct PoolConfig {
     stack_size: Option<usize>,
     background_limit: Option<usize>,
     shutdown: ShutdownPolicy,
+    watchdog: Option<Duration>,
+    thread_priority: Option<ThreadPriority>,
+    affinity: Option<Vec<usize>>,
 }
 
 impl Default for PoolConfig {
@@ -37,6 +45,9 @@ impl Default for PoolConfig {
             stack_size: None,
             background_limit: None,
             shutdown: ShutdownPolicy::Drain,
+            watchdog: Some(DEFAULT_WATCHDOG),
+            thread_priority: None,
+            affinity: None,
         }
     }
 }
@@ -77,6 +88,56 @@ impl PoolConfig {
     pub fn with_shutdown(mut self, policy: ShutdownPolicy) -> Self {
         self.shutdown = policy;
         self
+    }
+
+    /// Watchdog зависших задач (**только debug-сборки**): задача с меткой
+    /// ([`labeled`](crate::labeled) — задачи графа, `spawn`, async), исполняющаяся на потоке
+    /// пула дольше `threshold`, даёт одно предупреждение в лог (`tracing::warn!`, target
+    /// `pragma_jobs::watchdog`) с именем задачи и потока. `None` — выключен.
+    ///
+    /// По умолчанию [`DEFAULT_WATCHDOG`]. В release-сборке настройка игнорируется: ни потока
+    /// watchdog, ни учёта задач нет.
+    #[must_use]
+    pub fn with_watchdog(mut self, threshold: Option<Duration>) -> Self {
+        self.watchdog = threshold;
+        self
+    }
+
+    /// Приоритет рабочих потоков ОС (`None` — не менять). Если ОС отказала (например,
+    /// повышение на Linux без `CAP_SYS_NICE`), воркер пишет предупреждение в лог и работает
+    /// с прежним приоритетом.
+    #[must_use]
+    pub fn with_thread_priority(mut self, priority: Option<ThreadPriority>) -> Self {
+        self.thread_priority = priority;
+        self
+    }
+
+    /// Привязка воркеров к логическим ядрам: воркер `i` закрепляется за ядром
+    /// `cores[i % cores.len()]` (`None` — без привязки, решает ОС). Ошибка привязки —
+    /// предупреждение в лог, воркер работает без неё.
+    #[must_use]
+    pub fn with_affinity(mut self, cores: Option<Vec<usize>>) -> Self {
+        self.affinity = cores;
+        self
+    }
+
+    /// Порог watchdog (действует только в debug-сборках).
+    #[must_use]
+    pub fn watchdog(&self) -> Option<Duration> {
+        self.watchdog
+    }
+
+    /// Приоритет рабочих потоков.
+    #[must_use]
+    pub fn thread_priority(&self) -> Option<ThreadPriority> {
+        self.thread_priority
+    }
+
+    /// Ядро для воркера `index`, если задана привязка.
+    #[must_use]
+    pub fn core_for(&self, index: usize) -> Option<usize> {
+        let cores = self.affinity.as_deref()?;
+        cores.get(index.checked_rem(cores.len())?).copied()
     }
 
     /// Число рабочих потоков.
@@ -135,6 +196,16 @@ impl PoolConfig {
                 reason: "background_limit must be in 1..=workers",
             });
         }
+        if self.watchdog == Some(Duration::ZERO) {
+            return Err(JobsError::InvalidConfig {
+                reason: "watchdog threshold must be > 0",
+            });
+        }
+        if self.affinity.as_ref().is_some_and(Vec::is_empty) {
+            return Err(JobsError::InvalidConfig {
+                reason: "affinity core list must not be empty",
+            });
+        }
         Ok(self)
     }
 }
@@ -171,5 +242,23 @@ mod tests {
         );
         assert!(cfg.with_background_limit(Some(4)).validate().is_ok());
         assert_eq!(PoolConfig::default().with_workers(1).background_limit(), 1);
+    }
+
+    #[test]
+    fn watchdog_and_affinity_validation() {
+        let cfg = PoolConfig::default();
+        assert_eq!(cfg.watchdog(), Some(DEFAULT_WATCHDOG));
+        assert!(
+            cfg.clone()
+                .with_watchdog(Some(Duration::ZERO))
+                .validate()
+                .is_err()
+        );
+        assert!(cfg.clone().with_watchdog(None).validate().is_ok());
+        assert!(cfg.clone().with_affinity(Some(vec![])).validate().is_err());
+        let pinned = cfg.with_affinity(Some(vec![2, 5]));
+        assert_eq!(pinned.core_for(0), Some(2));
+        assert_eq!(pinned.core_for(3), Some(5));
+        assert_eq!(PoolConfig::default().core_for(0), None);
     }
 }

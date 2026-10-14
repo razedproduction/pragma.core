@@ -4,13 +4,16 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as Deque};
 use pragma_base::tracing;
 use pragma_sync::{Backoff, CachePadded, Parker, ScopedTask, Unparker};
 
-use crate::{JobsError, PoolConfig, Priority, ShutdownPolicy};
+use crate::stats::{CounterSet, Counters, PoolStats, counter_set};
+#[cfg(debug_assertions)]
+use crate::watchdog::{Active, Watchdog};
+use crate::{JobsError, PoolConfig, Priority, ShutdownPolicy, sys};
 
 /// Страховка от ошибок протокола пробуждения: спящий воркер всё равно проверит очереди.
 const PARK_TIMEOUT: Duration = Duration::from_millis(50);
@@ -128,6 +131,11 @@ pub(crate) struct Shared {
     stopped: AtomicBool,
     policy: ShutdownPolicy,
     background_limit: usize,
+    /// Метрики (см. [`PoolStats`]): по набору на каждый индекс `stealers` и последний — для
+    /// внешних потоков без слота.
+    counters: CounterSet,
+    #[cfg(debug_assertions)]
+    watchdog: Option<Watchdog>,
 }
 
 thread_local! {
@@ -253,6 +261,34 @@ pub(crate) fn inherited_priority() -> Priority {
         None => Priority::Frame,
         Some(Priority::Background) => Priority::Normal,
         Some(other) => other,
+    }
+}
+
+/// Приоритет задачи пула, которую исполняет текущий поток (`None` — поток вне задач пула).
+pub(crate) fn current_priority() -> Option<Priority> {
+    CURRENT_PRIORITY.try_with(Cell::get).ok().flatten()
+}
+
+/// Debug-сборки: отмечает задачу с меткой в ячейке watchdog текущего потока пула.
+#[cfg(debug_assertions)]
+pub(crate) struct WatchGuard {
+    ctx: Rc<WorkerCtx>,
+    previous: Option<Active>,
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn watch(kind: &'static str, name: &str) -> Option<WatchGuard> {
+    let ctx = current_worker()?;
+    let previous = ctx.shared.watchdog.as_ref()?.enter(ctx.index, kind, name);
+    Some(WatchGuard { ctx, previous })
+}
+
+#[cfg(debug_assertions)]
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        if let Some(watchdog) = self.ctx.shared.watchdog.as_ref() {
+            watchdog.exit(self.ctx.index, self.previous.take());
+        }
     }
 }
 
@@ -412,11 +448,33 @@ impl Shared {
             }
             for stealers in &self.stealers {
                 if let Some(job) = steal_loop(|| stealers.get(lane).steal()) {
+                    if let Some(counters) = self.external_counters() {
+                        counters.stolen_shared();
+                    }
                     return Some((job, priority));
                 }
             }
         }
         None
+    }
+
+    /// Метрики внешних потоков без слота (пишут несколько потоков — только RMW).
+    fn external_counters(&self) -> Option<&Counters> {
+        self.counters.last().map(|c| &**c)
+    }
+
+    fn stats(&self) -> PoolStats {
+        let queued = |i: usize| {
+            self.stealers
+                .get(i)
+                .map_or(0, |s| s.frame.len().saturating_add(s.normal.len()))
+        };
+        PoolStats::collect(
+            &self.counters,
+            self.unparkers.len(),
+            queued,
+            [self.frame.len(), self.normal.len(), self.background.len()],
+        )
     }
 
     fn acquire_external_slot(&self) -> Option<(usize, LocalQueues)> {
@@ -459,6 +517,9 @@ pub(crate) fn help_once(shared: &Arc<Shared>) -> bool {
     }
     match shared.find_external() {
         Some((job, priority)) => {
+            if let Some(counters) = shared.external_counters() {
+                counters.executed_shared();
+            }
             execute(job, priority);
             true
         }
@@ -519,6 +580,11 @@ impl WorkerCtx {
         std::mem::replace(&mut self.local, local)
     }
 
+    /// Метрики этого потока: пишет только он (воркер или владелец внешнего слота).
+    fn counters(&self) -> Option<&Counters> {
+        self.shared.counters.get(self.index).map(|c| &**c)
+    }
+
     /// xorshift64: детерминированный выбор жертвы без системного RNG.
     fn next_random(&self) -> u64 {
         let mut x = self.rng.get();
@@ -576,7 +642,12 @@ impl WorkerCtx {
                 // кража пачкой уносит и мелкие `join`-ветви, которых владелец вот-вот
                 // дождётся сам, — и вместо локального pop начинается пинг-понг между потоками.
                 match stealers.get(lane).steal() {
-                    Steal::Success(job) => return Some(job),
+                    Steal::Success(job) => {
+                        if let Some(counters) = self.counters() {
+                            counters.stolen();
+                        }
+                        return Some(job);
+                    }
                     Steal::Retry => retry = true,
                     Steal::Empty => {}
                 }
@@ -627,6 +698,11 @@ impl WorkerCtx {
         if found.background_slot {
             self.holds_background.set(true);
         }
+        // До исполнения: к моменту, когда ожидающий увидит завершение задачи, счётчик уже
+        // увеличен (снимок после `join` сходится с числом задач).
+        if let Some(counters) = self.counters() {
+            counters.executed();
+        }
         execute(found.job, found.priority);
         if found.background_slot {
             self.holds_background.set(false);
@@ -673,13 +749,47 @@ impl WorkerCtx {
         // Пара к `fence` в `Shared::notify_one`.
         fence(Ordering::SeqCst);
         if !self.shared.has_visible_work() && !self.shared.is_shutdown() {
+            let parked = Instant::now();
             parker.park_timeout(PARK_TIMEOUT);
+            if let Some(counters) = self.counters() {
+                counters.parked(parked.elapsed());
+            }
         }
         self.shared.unregister_idle(self.index);
     }
 }
 
-fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, parker: Parker) {
+/// Платформенные настройки воркера (`sys`), применяемые им самим при старте.
+#[derive(Clone, Copy)]
+struct ThreadSetup {
+    priority: Option<sys::ThreadPriority>,
+    core: Option<usize>,
+}
+
+impl ThreadSetup {
+    /// Отказ ОС — не повод не запускать воркер: предупреждение и работа без настройки.
+    fn apply(self, index: usize) {
+        if let Some(priority) = self.priority
+            && let Err(error) = sys::set_current_thread_priority(priority)
+        {
+            tracing::warn!(worker = index, ?priority, %error, "failed to set worker thread priority");
+        }
+        if let Some(core) = self.core
+            && let Err(error) = sys::pin_current_thread(core)
+        {
+            tracing::warn!(worker = index, core, %error, "failed to pin worker thread to a core");
+        }
+    }
+}
+
+fn worker_main(
+    shared: Arc<Shared>,
+    index: usize,
+    local: LocalQueues,
+    parker: Parker,
+    setup: ThreadSetup,
+) {
+    setup.apply(index);
     let ctx = Rc::new(WorkerCtx::new(shared, index, local, false));
     let _ = WORKER.try_with(|cell| cell.set(Some(Rc::clone(&ctx))));
     loop {
@@ -689,14 +799,20 @@ fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, parker: Pa
         if ctx.run_one() {
             continue;
         }
-        if let Some(found) = ctx.search() {
-            ctx.run_found(found);
-            continue;
+        let idle = Instant::now();
+        let found = ctx.search();
+        let stop = found.is_none() && ctx.shared.is_shutdown();
+        if found.is_none() && !stop {
+            ctx.sleep(&parker);
         }
-        if ctx.shared.is_shutdown() {
-            break;
+        if let Some(counters) = ctx.counters() {
+            counters.idle(idle.elapsed());
         }
-        ctx.sleep(&parker);
+        match found {
+            Some(found) => ctx.run_found(found),
+            None if stop => break,
+            None => {}
+        }
     }
     let _ = WORKER.try_with(Cell::take);
     // Политика `Cancel`: задачи, оставшиеся в своей очереди, сбрасываются (хэндлы — `Cancelled`).
@@ -711,6 +827,21 @@ fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, parker: Pa
 pub struct ThreadPool {
     pub(crate) shared: Arc<Shared>,
     threads: Vec<JoinHandle<()>>,
+    /// Поток watchdog (только debug-сборки и только если он включён в конфиге).
+    #[cfg(debug_assertions)]
+    watchdog: Option<JoinHandle<()>>,
+}
+
+/// Поток watchdog: просматривает ячейки потоков пула, пока пул не начал остановку.
+#[cfg(debug_assertions)]
+fn watchdog_main(shared: &Shared) {
+    let Some(watchdog) = shared.watchdog.as_ref() else {
+        return;
+    };
+    while !shared.is_shutdown() {
+        thread::park_timeout(watchdog.period());
+        watchdog.scan();
+    }
 }
 
 impl std::fmt::Debug for ThreadPool {
@@ -750,6 +881,15 @@ impl ThreadPool {
                 Mutex::new(Some(local))
             })
             .collect();
+        let counters = counter_set(stealers.len());
+        #[cfg(debug_assertions)]
+        let watchdog = config.watchdog().map(|threshold| {
+            let names = (0..workers)
+                .map(|i| format!("{}-{i}", config.name_prefix()))
+                .chain((0..EXTERNAL_SLOTS).map(|i| format!("external-{i}")))
+                .collect();
+            Watchdog::new(threshold, names)
+        });
         let shared = Arc::new(Shared {
             frame: Injector::new(),
             normal: Injector::new(),
@@ -765,10 +905,15 @@ impl ThreadPool {
             stopped: AtomicBool::new(false),
             policy: config.shutdown(),
             background_limit: config.background_limit(),
+            counters,
+            #[cfg(debug_assertions)]
+            watchdog,
         });
         let mut pool = Self {
             shared,
             threads: Vec::with_capacity(workers),
+            #[cfg(debug_assertions)]
+            watchdog: None,
         };
         for (index, (local, parker)) in locals.into_iter().zip(parkers).enumerate() {
             let name = format!("{}-{index}", config.name_prefix());
@@ -776,14 +921,68 @@ impl ThreadPool {
             if let Some(bytes) = config.stack_size() {
                 builder = builder.stack_size(bytes);
             }
+            let setup = ThreadSetup {
+                priority: config.thread_priority(),
+                core: config.core_for(index),
+            };
             let shared = Arc::clone(&pool.shared);
-            match builder.spawn(move || worker_main(shared, index, local, parker)) {
+            match builder.spawn(move || worker_main(shared, index, local, parker, setup)) {
                 Ok(handle) => pool.threads.push(handle),
                 // `pool` сбрасывается здесь и останавливает уже запущенные потоки.
                 Err(source) => return Err(JobsError::SpawnFailed { name, source }),
             }
         }
+        #[cfg(debug_assertions)]
+        pool.start_watchdog(config.name_prefix());
         Ok(pool)
+    }
+
+    /// Debug-сборки: запускает поток watchdog. Не вышло — пул работает без него.
+    #[cfg(debug_assertions)]
+    fn start_watchdog(&mut self, prefix: &str) {
+        if self.shared.watchdog.is_none() {
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        match thread::Builder::new()
+            .name(format!("{prefix}-watchdog"))
+            .spawn(move || watchdog_main(&shared))
+        {
+            Ok(handle) => self.watchdog = Some(handle),
+            Err(error) => tracing::warn!(%error, "failed to spawn pool watchdog thread"),
+        }
+    }
+
+    /// Снимок метрик пула: задачи, кражи, простой и парковки по воркерам, глубина очередей.
+    ///
+    /// Не блокирует воркеры (только чтение атомиков и длин очередей) и не влияет на
+    /// исполнение задач; аллоцирует сам снимок.
+    ///
+    /// ```
+    /// use pragma_jobs::{PoolConfig, Priority, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// let before = pool.stats();
+    /// for _ in 0..10 {
+    ///     pool.spawn(Priority::Normal, || ()).join()?;
+    /// }
+    /// let after = pool.stats();
+    /// assert_eq!(after.executed() - before.executed(), 10);
+    /// assert_eq!(after.workers().len(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn stats(&self) -> PoolStats {
+        self.shared.stats()
+    }
+
+    /// Индекс воркера этого пула, на котором выполняется вызов (`None` — поток не воркер
+    /// этого пула, например главный поток внутри `scope`).
+    #[must_use]
+    pub fn current_worker_index(&self) -> Option<usize> {
+        current_worker_of(&self.shared)
+            .filter(|w| !w.external)
+            .map(|w| w.index)
     }
 
     /// Число рабочих потоков.
@@ -803,6 +1002,13 @@ impl Drop for ThreadPool {
     fn drop(&mut self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
         self.shared.wake_all();
+        #[cfg(debug_assertions)]
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.thread().unpark();
+            if watchdog.join().is_err() {
+                tracing::error!("pool watchdog thread terminated with a panic");
+            }
+        }
         let me = thread::current().id();
         let mut joined_all = true;
         for handle in self.threads.drain(..) {
