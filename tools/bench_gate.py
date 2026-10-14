@@ -124,11 +124,15 @@ def measure(side: Side) -> dict[str, float]:
     results.update(criterion_results(side))
     exe = side.target / "release" / ("frame_sim.exe" if os.name == "nt" else "frame_sim")
     for workers in frame_sim_workers():
-        out = run(
-            [str(exe), "--ticks", str(FRAME_SIM_TICKS), "--workers", str(workers)], side
+        # Два запуска подряд, лучший: время включает создание пула и шумит сильнее criterion.
+        ms = min(
+            frame_sim_ms_per_tick(
+                run([str(exe), "--ticks", str(FRAME_SIM_TICKS), "--workers", str(workers)], side)
+            )
+            for _ in range(2)
         )
         # Нс, как у criterion, чтобы таблица была однородной.
-        results[f"frame_sim/workers_{workers}"] = frame_sim_ms_per_tick(out) * 1e6
+        results[f"frame_sim/workers_{workers}"] = ms * 1e6
     return results
 
 
@@ -149,6 +153,9 @@ def fmt_ns(ns: float) -> str:
 
 
 def main() -> int:
+    # Консоль раннера Windows — cp1252: кириллица отчёта иначе роняет скрипт.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--head", type=Path, required=True)
