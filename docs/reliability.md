@@ -59,7 +59,7 @@ Allowed in tests (`clippy.toml`).
 | Failure | Behavior |
 |---|---|
 | A panic in a task | Caught; an error from `join`/`scope`/the handle; the worker stays alive |
-| The OS refused to create a thread | `JobsError::SpawnFailed`; the pool starts with fewer workers if `allow_partial` is enabled, otherwise an error |
+| The OS refused to create a thread | `ThreadPool::new` stops and `join`s the workers already started and returns `JobsError::SpawnFailed` with the thread name; no half-built pool is returned |
 | A cycle or an ambiguous order in the graph | A `build()` error with the task names, before the first frame |
 | An error or panic of a graph task | Its successors are skipped in the frame, independent branches finish; `run` returns the error of the task with the lowest index |
 | A graph task took an undeclared or busy resource | `UndeclaredAccess` / `BorrowConflict` instead of a race; a slot poisoned by a panic stays accessible |
