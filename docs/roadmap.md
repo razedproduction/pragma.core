@@ -14,7 +14,7 @@ Legend: ✅ done · 🚧 in progress · 📋 planned
 | M3 | 0.3.0 | Async tasks and the `frame_sim` vertical slice | ✅ |
 | M4 | 0.4.0 | Observability and tuning | ✅ |
 | M5 | 0.5.0 | Hardening: determinism, fuzz, bench gate, semver | ✅ (M5a is PR #8, M5b is PR #9; landed in `main` as a single squash, #8) |
-| M6 | 1.0.0 | Stable API, publication | 🚧 (M6a: API review, 0.6.0; M6b: documentation in English) |
+| M6 | 1.0.0 | Stable API, publication | 🚧 (M6a: API review, 0.6.0; M6b: documentation in English; M6d: MSRV and versioning policy) |
 
 ---
 
@@ -206,7 +206,7 @@ both OSes, nightly fuzz/soak run on schedule; large inputs give errors instead o
   `tracing`/`crossbeam` re-exports, `puffin` outside semver, `#[non_exhaustive]` on error variants
 - [x] Documentation language: everything in English (M6b, DECISIONS #43, supersedes #11)
 - [ ] Complete rustdoc with examples, a guide "How to embed pragma.core in your engine"
-- [ ] MSRV and versioning policy in the README
+- [x] MSRV and versioning policy in the README (M6d, DECISIONS #44)
 - [ ] Publication on crates.io
 
 ---

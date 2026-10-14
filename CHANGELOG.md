@@ -10,6 +10,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
   `docs/`, `DECISIONS.md`, `CONTRIBUTING.md`, this changelog, CI comments, GitHub templates and the
   output of `tools/*.py` (DECISIONS #43, supersedes #11). No API changes.
 
+### Added
+
+- README sections "MSRV policy" and "Versioning": MSRV 1.88, raised only in a minor release with
+  a changelog line (DECISIONS #44); lockstep versions, exact internal dependencies, what is
+  outside semver, how breaking changes are handled before and after 1.0. No API changes.
+
 ## [0.6.0] — 2026-10-14
 
 ### Changed (breaking) — M6a "Public API review" (DECISIONS #42)

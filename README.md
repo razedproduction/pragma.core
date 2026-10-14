@@ -18,9 +18,10 @@ of it without each inventing their own thread pool.
 **0.6.0 — feature-complete for 1.0, public API reviewed.** Milestones M0–M5 are done: the
 work-stealing job system, the per-frame task graph, async tasks, observability, tuning and
 the hardening pass (determinism suite, benchmark gate and semver checks in CI). M6 is in
-progress: the 1.0 API review is done (M6a); documentation and the crates.io release are
-next. Until 1.0, minor versions may break the API; every break is listed in the
-[changelog](CHANGELOG.md).
+progress: the 1.0 API review, the move of all documentation to English and the
+[MSRV](#msrv-policy) and [versioning](#versioning) policy are done; complete rustdoc, an
+embedding guide and the crates.io release are next. Until 1.0, minor versions may break the
+API; every break is listed in the [changelog](CHANGELOG.md).
 See the [roadmap](docs/roadmap.md).
 
 ## Features
@@ -131,6 +132,46 @@ pragma_core = { git = "https://github.com/razedproduction/pragma.core" }
 `base` and `sync` are always available. Each feature builds and passes clippy on its own
 (`cargo hack --each-feature` in CI).
 
+## MSRV policy
+
+The minimum supported Rust version is **1.88** (`rust-version` in `[workspace.package]`,
+[DECISIONS #10](DECISIONS.md)), the minimum required by `proptest`.
+
+- **Checked in CI.** The `MSRV (1.88)` job runs `cargo +1.88 check --workspace --all-features`
+  on every PR and every push to `main`. Development itself uses the toolchain pinned in `rust-toolchain.toml`
+  (1.99.0), so lints are identical locally and in CI.
+- **Raised only in a minor release.** A higher MSRV is not treated as a breaking change, but
+  it never ships in a patch release: it goes into the next minor version (`1.x.0`; `0.x.0`
+  before 1.0), with its own line in the [changelog](CHANGELOG.md) and a
+  [decision record](DECISIONS.md) explaining why ([DECISIONS #44](DECISIONS.md)).
+- **One change, three places.** `rust-version`, the CI `msrv` job and the badge above move
+  together in the same PR.
+
+## Versioning
+
+pragma.core follows [SemVer](https://semver.org/); the rules are in
+[docs/reliability.md §8](docs/reliability.md#8-api-stability).
+
+- **Lockstep.** All crates share one version (`version` in `[workspace.package]`, currently
+  0.6.0): the `pragma_core` facade exposes all of them, so separate versions would give users
+  nothing ([DECISIONS #33](DECISIONS.md)). A breaking change in any crate is a breaking
+  release of all of them.
+- **Exact internal dependencies.** The crates depend on each other with `=X.Y.Z`, so
+  `pragma_jobs` 1.0.0 never builds against a `pragma_sync` 1.0.1 whose internals have moved
+  ([DECISIONS #42](DECISIONS.md)). Depend on `pragma_core`, or keep all `pragma_*` crates at
+  the same version.
+- **Outside semver.** No compatibility guarantees cover:
+  - `pragma_sync::__private` (hidden from the docs): the scheduler's building blocks, which
+    change with every optimization of `join`/`scope`;
+  - the `puffin` feature and the `pragma_core::puffin` re-export: `puffin` is not 1.0 yet,
+    and moving to a new `puffin` version is a minor release.
+- **Breaking changes.** Before 1.0, a minor version (`0.x.0`) may break the API, and every
+  break is listed in the [changelog](CHANGELOG.md). After 1.0, breaks happen only in a major
+  release; an item is first marked `#[deprecated(since, note)]` for at least one minor release.
+- **Checked in CI.** `cargo semver-checks --workspace` runs on every PR against the PR's base
+  on `main` (not against crates.io or a tag): a breaking change that comes without a version
+  bump fails the PR that introduces it.
+
 ## Performance
 
 Windows 10, AMD FX-8350 (8 logical cores), `cargo bench`. Ranges are min…max across A/B
@@ -188,7 +229,7 @@ cargo run -p frame_sim --release -- --ticks 300 --verify 1,4
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` (1.99.0); the minimum supported Rust version
-is 1.88. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full check list (Miri, loom, fuzz, benches).
+is 1.88 ([MSRV policy](#msrv-policy)). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full check list (Miri, loom, fuzz, benches).
 
 ## Documentation
 
