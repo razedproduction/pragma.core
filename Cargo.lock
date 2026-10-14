@@ -638,6 +638,7 @@ name = "pragma_async"
 version = "0.0.1"
 dependencies = [
  "async-task",
+ "criterion",
  "futures-lite",
  "pragma_base",
  "pragma_jobs",

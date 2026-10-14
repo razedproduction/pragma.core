@@ -4,6 +4,9 @@ use std::time::Duration;
 use crate::JobsError;
 use crate::sys::ThreadPriority;
 
+/// Раундов `yield` перед парковкой по умолчанию (см. [`PoolConfig::with_idle_spin`]).
+pub const DEFAULT_IDLE_SPIN: u32 = 32;
+
 /// Порог watchdog по умолчанию (только debug-сборки, см. [`PoolConfig::with_watchdog`]).
 pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(5);
 
@@ -33,6 +36,7 @@ pub struct PoolConfig {
     watchdog: Option<Duration>,
     thread_priority: Option<ThreadPriority>,
     affinity: Option<Vec<usize>>,
+    idle_spin: u32,
 }
 
 impl Default for PoolConfig {
@@ -48,6 +52,7 @@ impl Default for PoolConfig {
             watchdog: Some(DEFAULT_WATCHDOG),
             thread_priority: None,
             affinity: None,
+            idle_spin: DEFAULT_IDLE_SPIN,
         }
     }
 }
@@ -119,6 +124,22 @@ impl PoolConfig {
     pub fn with_affinity(mut self, cores: Option<Vec<usize>>) -> Self {
         self.affinity = cores;
         self
+    }
+
+    /// Сколько раундов `yield` воркер без работы ищет её, прежде чем уснуть (после короткого
+    /// spin). Больше — быстрее подхватывается следующая волна работы (кадр, вложенный
+    /// `join`), но дольше занят CPU без дела; `0` — парковаться сразу после spin. Значение по
+    /// умолчанию [`DEFAULT_IDLE_SPIN`] подобрано по бенчам (`docs/perf.md`).
+    #[must_use]
+    pub fn with_idle_spin(mut self, rounds: u32) -> Self {
+        self.idle_spin = rounds;
+        self
+    }
+
+    /// Раундов `yield` перед парковкой.
+    #[must_use]
+    pub fn idle_spin(&self) -> u32 {
+        self.idle_spin
     }
 
     /// Порог watchdog (действует только в debug-сборках).

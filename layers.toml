@@ -21,4 +21,4 @@ frame_sim = 5     # пример-вертикальный срез (examples/), 
 # Осознанно принятые исключения из правила «никакого C/C++» (DECISIONS.md #7).
 [purity.accepted]
 generator = "dev-only: loom (cfg(loom)) для модель-чекинга pragma_sync; в дерево пользователей не попадает"
-alloca = "dev-only: criterion 0.8 (бенчи pragma_jobs и pragma_graph, DECISIONS.md #17, #21); в дерево пользователей не попадает"
+alloca = "dev-only: criterion 0.8 (бенчи pragma_jobs, pragma_graph и pragma_async, DECISIONS.md #17, #21, #31); в дерево пользователей не попадает"

@@ -32,7 +32,7 @@
 - В `pragma_sync`: `#![deny(unsafe_op_in_unsafe_fn)]`, `clippy::undocumented_unsafe_blocks = deny`,
   комментарий `// SAFETY:` на каждый блок с объяснением, почему инвариант выполняется.
 - Тесты `pragma_sync` гоняются под Miri (`cargo +nightly miri test -p pragma_sync`).
-- Каждый атомарный протокол (парковка, латчи, счётчики графа) получает loom-модель:
+- Каждый атомарный протокол (парковка, латчи, счётчики графа, латч `join_on_stack`) получает loom-модель:
   `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests` (модели — в
   `crates/pragma_sync/tests/loom.rs`). loom моделирует `SeqCst` как `AcqRel`, поэтому протоколы
   строятся на RMW-операциях, а не на «Dekker через SeqCst-load» (см. `AtomicCounter`).

@@ -6,9 +6,49 @@
 #![cfg(loom)]
 
 use loom::sync::Arc;
+use loom::sync::Mutex;
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use loom::thread;
-use pragma_sync::{ArrivalCounter, AtomicCounter, CountLatch, Parker};
+use pragma_sync::{ArrivalCounter, AtomicCounter, CountLatch, Parker, StackJob, join_on_stack};
+
+#[test]
+fn stack_join_owner_never_misses_thief() {
+    // Протокол латча `join_on_stack`: владелец помогает, затем объявляет сон и паркуется;
+    // вор исполняет задачу и, если владелец объявил сон, будит его. Дедлок = потерянное
+    // пробуждение; после возврата владельца кадр уничтожен — вор его уже не трогает.
+    loom::model(|| {
+        let parker = Parker::new();
+        let unparker = parker.unparker();
+        let queue: Arc<Mutex<Option<StackJob>>> = Arc::new(Mutex::new(None));
+        let thief = {
+            let queue = Arc::clone(&queue);
+            thread::spawn(move || {
+                loop {
+                    if let Some(job) = queue.lock().unwrap().take() {
+                        if job.run() == Some(0) {
+                            unparker.unpark();
+                        }
+                        return;
+                    }
+                    thread::yield_now();
+                }
+            })
+        };
+        let data = 41_usize;
+        let ((), b) = join_on_stack(
+            0,
+            || data + 1,
+            |job| *queue.lock().unwrap() = Some(job),
+            |latch| {
+                if latch.prepare_park() {
+                    parker.park();
+                }
+            },
+        );
+        assert_eq!(b.and_then(Result::ok), Some(42));
+        thief.join().unwrap();
+    });
+}
 
 #[test]
 fn latch_releases_waiter() {

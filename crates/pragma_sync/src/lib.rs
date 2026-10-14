@@ -13,6 +13,7 @@
 //! | [`Parker`] / [`Unparker`] | Сон простаивающего воркера и адресное пробуждение |
 //! | [`scope()`] / [`TaskScope`] / [`ScopedTask`] | Задачи с заимствованием стека (стирание лайфтайма) |
 //! | [`StackSlot`] | Задача области без аллокации (замыкание на стеке владельца) |
+//! | [`join_on_stack`] / [`StackJob`] | Fork-join без аллокаций и `Arc`: вторая ветвь на стеке с латчем |
 //! | [`run_labeled`] / [`current_label`] | Метка задачи потока для panic hook и крэш-репортов |
 //!
 //! ```
@@ -42,6 +43,7 @@
 mod arrival;
 mod counter;
 mod error;
+mod join;
 mod label;
 mod latch;
 mod parker;
@@ -52,6 +54,7 @@ pub use arrival::ArrivalCounter;
 pub use counter::AtomicCounter;
 pub use crossbeam_utils::{Backoff, CachePadded};
 pub use error::SyncError;
+pub use join::{JoinLatch, NO_OWNER, StackJob, join_on_stack};
 pub use label::{TaskLabel, current_label, run_labeled};
 pub use latch::CountLatch;
 pub use parker::{Parker, Unparker};

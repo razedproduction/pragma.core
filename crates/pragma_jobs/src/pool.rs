@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as Deque};
 use pragma_base::tracing;
-use pragma_sync::{Backoff, CachePadded, Parker, ScopedTask, Unparker};
+use pragma_sync::{
+    Backoff, CachePadded, JoinLatch, Parker, ScopedTask, StackJob, Unparker, join_on_stack,
+};
 
 use crate::stats::{CounterSet, Counters, PoolStats, counter_set};
 #[cfg(debug_assertions)]
@@ -24,16 +26,26 @@ pub(crate) enum Job {
     Boxed(Box<dyn FnOnce() + Send + 'static>),
     /// Задача области (`scope`/`join`/`parallel_*`) со стёртым в `pragma_sync` лайфтаймом.
     Scoped(ScopedTask),
+    /// Вторая ветвь `join` на стеке владельца (DECISIONS #30).
+    Stack(StackJob),
 }
 
 impl Job {
-    fn run(self) {
+    /// Исполняет задачу; возвращает индекс участника пула, которого нужно разбудить
+    /// (владелец `join`, уснувший в ожидании этой задачи).
+    fn run(self) -> Option<usize> {
         match self {
             Self::Boxed(f) => f(),
             Self::Scoped(task) => task.run(),
+            Self::Stack(job) => return job.run(),
         }
+        None
     }
 }
+
+/// Сколько спит владелец `join`, ожидающий украденную ветвь, прежде чем снова поискать работу
+/// (вор будит раньше, когда закончит).
+const JOIN_RECHECK: Duration = Duration::from_micros(500);
 
 /// Локальная очередь воркера: только `Frame` и `Normal` (фоновые задачи — только глобально).
 #[derive(Clone, Copy)]
@@ -53,9 +65,12 @@ impl Lane {
     }
 }
 
+/// Локальные очереди участника пула и его парковщик: переезжают вместе между внешним слотом
+/// и потоком, который его занял.
 struct LocalQueues {
     frame: Deque<Job>,
     normal: Deque<Job>,
+    parker: Parker,
 }
 
 impl LocalQueues {
@@ -63,6 +78,7 @@ impl LocalQueues {
         Self {
             frame: Deque::new_lifo(),
             normal: Deque::new_lifo(),
+            parker: Parker::new(),
         }
     }
 
@@ -116,6 +132,9 @@ pub(crate) struct Shared {
     stealers: Vec<LocalStealers>,
     /// По одному на воркер; индекс совпадает с индексом в `stealers`.
     unparkers: Vec<Unparker>,
+    /// Будильники всех участников (воркеры, затем внешние слоты) — для владельца `join`,
+    /// уснувшего в ожидании украденной ветви.
+    participants: Vec<Unparker>,
     /// Локальные очереди для внешних потоков (см. [`enter`]). `None` — слот занят.
     external_slots: Vec<Mutex<Option<LocalQueues>>>,
     /// Индексы спящих воркеров (стек: будим последнего уснувшего — его кэш теплее).
@@ -131,6 +150,8 @@ pub(crate) struct Shared {
     stopped: AtomicBool,
     policy: ShutdownPolicy,
     background_limit: usize,
+    /// Раундов `yield` в фазе поиска перед парковкой (`PoolConfig::with_idle_spin`).
+    idle_spin: u32,
     /// Метрики (см. [`PoolStats`]): по набору на каждый индекс `stealers` и последний — для
     /// внешних потоков без слота.
     counters: CounterSet,
@@ -294,13 +315,15 @@ impl Drop for WatchGuard {
 
 /// Исполняет задачу с выставленным текущим приоритетом. Паника, вырвавшаяся мимо обёртки
 /// задачи (например, из деструктора захваченного значения), не убивает поток.
-fn execute(job: Job, priority: Priority) {
+fn execute(shared: &Shared, job: Job, priority: Priority) {
     let previous = CURRENT_PRIORITY
         .try_with(|p| p.replace(Some(priority)))
         .ok()
         .flatten();
-    if panic::catch_unwind(AssertUnwindSafe(|| job.run())).is_err() {
-        tracing::error!("panic escaped a job wrapper; worker keeps running");
+    match panic::catch_unwind(AssertUnwindSafe(|| job.run())) {
+        Ok(Some(owner)) => shared.wake_participant(owner),
+        Ok(None) => {}
+        Err(_) => tracing::error!("panic escaped a job wrapper; worker keeps running"),
     }
     // Ошибка доступа возможна только при разрушении TLS на выходе потока — тогда восстанавливать нечего.
     let _ = CURRENT_PRIORITY.try_with(|p| p.set(previous));
@@ -386,6 +409,13 @@ impl Shared {
             target
         };
         if let Some(unparker) = target.and_then(|i| self.unparkers.get(i)) {
+            unparker.unpark();
+        }
+    }
+
+    /// Будит участника пула `index` (владельца `join`, уснувшего на своём парковщике).
+    fn wake_participant(&self, index: usize) {
+        if let Some(unparker) = self.participants.get(index) {
             unparker.unpark();
         }
     }
@@ -510,6 +540,25 @@ impl Shared {
     }
 }
 
+/// `join` через задачу на стеке, если текущий поток — участник пула `shared` (воркер или
+/// внешний поток во временном слоте); `None` — не участник, `a` и `b` возвращаются нетронутыми.
+#[expect(clippy::type_complexity, reason = "внутренний результат двух ветвей")]
+pub(crate) fn join_as_participant<A, B, RA, RB>(
+    shared: &Arc<Shared>,
+    a: A,
+    b: B,
+) -> Result<(std::thread::Result<RA>, Option<std::thread::Result<RB>>), (A, B)>
+where
+    A: FnOnce() -> RA,
+    B: FnOnce() -> RB + Send,
+    RB: Send,
+{
+    match current_worker_of(shared) {
+        Some(ctx) => Ok(ctx.join(a, b)),
+        None => Err((a, b)),
+    }
+}
+
 /// Выполняет одну единицу чужой работы, если она есть (help-while-wait).
 pub(crate) fn help_once(shared: &Arc<Shared>) -> bool {
     if let Some(worker) = current_worker_of(shared) {
@@ -520,7 +569,7 @@ pub(crate) fn help_once(shared: &Arc<Shared>) -> bool {
             if let Some(counters) = shared.external_counters() {
                 counters.executed_shared();
             }
-            execute(job, priority);
+            execute(shared, job, priority);
             true
         }
         None => false,
@@ -635,7 +684,9 @@ impl WorkerCtx {
                 .skip(start)
                 .take(victims)
             {
-                if i == self.index {
+                // `steal` в crossbeam сначала входит в эпоху (`epoch::pin`), а пустых жертв на
+                // круге поиска почти все: дешёвая проверка длины без входа в эпоху.
+                if i == self.index || stealers.get(lane).is_empty() {
                     continue;
                 }
                 // У жертвы крадём по одной (самой старой, обычно самой крупной) задаче:
@@ -703,7 +754,7 @@ impl WorkerCtx {
         if let Some(counters) = self.counters() {
             counters.executed();
         }
-        execute(found.job, found.priority);
+        execute(&self.shared, found.job, found.priority);
         if found.background_slot {
             self.holds_background.set(false);
             self.shared.release_background();
@@ -714,9 +765,20 @@ impl WorkerCtx {
     fn search(&self) -> Option<Found> {
         self.shared.searching.fetch_add(1, Ordering::SeqCst);
         let backoff = Backoff::new();
+        let mut yields = 0_u32;
         let mut found = None;
-        while !backoff.is_completed() {
-            backoff.snooze();
+        loop {
+            // Сначала короткий spin (`Backoff`), затем `idle_spin` раундов с `yield`: потоки,
+            // которые вот-вот получат работу (следующая волна `join`, следующий кадр), не
+            // платят за парковку и пробуждение через ОС (см. `docs/perf.md`).
+            if !backoff.is_completed() {
+                backoff.snooze();
+            } else if yields < self.shared.idle_spin {
+                thread::yield_now();
+                yields = yields.saturating_add(1);
+            } else {
+                break;
+            }
             found = self.find();
             if found.is_some() {
                 break;
@@ -736,7 +798,72 @@ impl WorkerCtx {
         found
     }
 
-    fn sleep(&self, parker: &Parker) {
+    /// `join` на участнике пула (воркер или внешний слот): `b` — задача на стеке
+    /// (DECISIONS #30). Не украденную `b` поток забирает из своей очереди и исполняет сам —
+    /// без атомарных RMW и без аллокаций; украденную ждёт, помогая, а затем засыпает до
+    /// пробуждения вором.
+    pub(crate) fn join<A, B, RA, RB>(
+        &self,
+        a: A,
+        b: B,
+    ) -> (std::thread::Result<RA>, Option<std::thread::Result<RB>>)
+    where
+        A: FnOnce() -> RA,
+        B: FnOnce() -> RB + Send,
+        RB: Send,
+    {
+        let lane = match inherited_priority() {
+            Priority::Frame => Lane::Frame,
+            Priority::Normal | Priority::Background => Lane::Normal,
+        };
+        let queue = self.local.get(lane);
+        let backoff = Backoff::new();
+        let (ra, rb) = join_on_stack(
+            self.index,
+            b,
+            |job| {
+                let id = job.id();
+                queue.push(Job::Stack(job));
+                self.shared.notify_one();
+                let ra = panic::catch_unwind(AssertUnwindSafe(a));
+                // `a` забрала из очереди всё, что положила сама (кроме `spawn` без ожидания),
+                // поэтому сверху — наша `b`, если её не украли.
+                match queue.pop() {
+                    Some(Job::Stack(job)) if job.id() == id => {
+                        if let Some(counters) = self.counters() {
+                            counters.executed();
+                        }
+                        job.run_inline();
+                    }
+                    Some(other) => self.run_found(Found {
+                        job: other,
+                        priority: lane.priority(),
+                        background_slot: false,
+                    }),
+                    None => {}
+                }
+                ra
+            },
+            |latch| self.wait_step(latch, &backoff),
+        );
+        (ra, rb)
+    }
+
+    /// Один шаг ожидания украденной ветви `join`: помочь, покрутиться или уснуть.
+    fn wait_step(&self, latch: &JoinLatch<'_>, backoff: &Backoff) {
+        if self.run_one() {
+            backoff.reset();
+        } else if !backoff.is_completed() {
+            backoff.snooze();
+        } else if latch.prepare_park() {
+            // Вор разбудит по индексу (`Shared::wake_participant`); таймаут — чтобы снова
+            // поискать работу, появившуюся, пока спим (новые задачи будят только воркеров).
+            self.local.parker.park_timeout(JOIN_RECHECK);
+        }
+    }
+
+    fn sleep(&self) {
+        let parker = &self.local.parker;
         {
             let mut idle = self
                 .shared
@@ -782,14 +909,14 @@ impl ThreadSetup {
     }
 }
 
-fn worker_main(
-    shared: Arc<Shared>,
-    index: usize,
-    local: LocalQueues,
-    parker: Parker,
-    setup: ThreadSetup,
-) {
+fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, setup: ThreadSetup) {
     setup.apply(index);
+    // Первая кража регистрирует поток в `crossbeam-epoch` (аллокация хэндла в TLS). Делаем её
+    // сразу, а не посреди кадра: с проверкой `is_empty` перед кражей воркер может долго не
+    // доходить до `steal` (кадр графа без аллокаций, `tests/alloc.rs`).
+    if let Some(own) = shared.stealers.get(index) {
+        let _ = own.frame.steal();
+    }
     let ctx = Rc::new(WorkerCtx::new(shared, index, local, false));
     let _ = WORKER.try_with(|cell| cell.set(Some(Rc::clone(&ctx))));
     loop {
@@ -803,7 +930,7 @@ fn worker_main(
         let found = ctx.search();
         let stop = found.is_none() && ctx.shared.is_shutdown();
         if found.is_none() && !stop {
-            ctx.sleep(&parker);
+            ctx.sleep();
         }
         if let Some(counters) = ctx.counters() {
             counters.idle(idle.elapsed());
@@ -863,21 +990,20 @@ impl ThreadPool {
         let config = config.validate()?;
         let workers = config.workers();
         let mut locals = Vec::with_capacity(workers);
-        let mut parkers = Vec::with_capacity(workers);
         let mut stealers = Vec::with_capacity(workers);
         let mut unparkers = Vec::with_capacity(workers);
         for _ in 0..workers {
             let local = LocalQueues::new();
             stealers.push(local.stealers());
+            unparkers.push(local.parker.unparker());
             locals.push(local);
-            let parker = Parker::new();
-            unparkers.push(parker.unparker());
-            parkers.push(parker);
         }
+        let mut participants = unparkers.clone();
         let external_slots = (0..EXTERNAL_SLOTS)
             .map(|_| {
                 let local = LocalQueues::new();
                 stealers.push(local.stealers());
+                participants.push(local.parker.unparker());
                 Mutex::new(Some(local))
             })
             .collect();
@@ -896,6 +1022,7 @@ impl ThreadPool {
             background: Injector::new(),
             stealers,
             unparkers,
+            participants,
             external_slots,
             idle: Mutex::new(Vec::with_capacity(workers)),
             sleeping: CachePadded::new(AtomicUsize::new(0)),
@@ -905,6 +1032,7 @@ impl ThreadPool {
             stopped: AtomicBool::new(false),
             policy: config.shutdown(),
             background_limit: config.background_limit(),
+            idle_spin: config.idle_spin(),
             counters,
             #[cfg(debug_assertions)]
             watchdog,
@@ -915,7 +1043,7 @@ impl ThreadPool {
             #[cfg(debug_assertions)]
             watchdog: None,
         };
-        for (index, (local, parker)) in locals.into_iter().zip(parkers).enumerate() {
+        for (index, local) in locals.into_iter().enumerate() {
             let name = format!("{}-{index}", config.name_prefix());
             let mut builder = thread::Builder::new().name(name.clone());
             if let Some(bytes) = config.stack_size() {
@@ -926,7 +1054,7 @@ impl ThreadPool {
                 core: config.core_for(index),
             };
             let shared = Arc::clone(&pool.shared);
-            match builder.spawn(move || worker_main(shared, index, local, parker, setup)) {
+            match builder.spawn(move || worker_main(shared, index, local, setup)) {
                 Ok(handle) => pool.threads.push(handle),
                 // `pool` сбрасывается здесь и останавливает уже запущенные потоки.
                 Err(source) => return Err(JobsError::SpawnFailed { name, source }),
