@@ -1,4 +1,20 @@
 /// Task priority (`docs/architecture.md` §3.2). `Ord` order: `Frame` is the most urgent.
+///
+/// Priority is chosen explicitly only for [`ThreadPool::spawn`](crate::ThreadPool::spawn) and
+/// [`Spawner::spawn_detached`](crate::Spawner::spawn_detached); `scope`/`join`/`parallel_*`
+/// inherit it from the calling task (see [`ThreadPool::scope`](crate::ThreadPool::scope)).
+///
+/// ```
+/// use pragma_jobs::{PoolConfig, Priority, ThreadPool, current_priority};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+/// let streaming = pool.spawn(Priority::Background, current_priority);
+/// assert_eq!(streaming.join()?, Some(Priority::Background));
+///
+/// assert!(Priority::Frame < Priority::Background);
+/// assert_eq!(Priority::Background.as_str(), "background");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[non_exhaustive]
 pub enum Priority {
@@ -30,6 +46,17 @@ impl Priority {
 ///
 /// The split depends **only** on the data length and `Grain`, not on the number of workers, so
 /// `parallel_reduce` gives a bit-identical result on any pool (`architecture.md` §6).
+///
+/// `Auto` suits uniform, cheap per-element work; pick `Fixed` when elements are expensive (smaller
+/// chunks balance better) or when the chunk boundaries must stay put while the data grows.
+///
+/// ```
+/// use pragma_jobs::Grain;
+///
+/// assert_eq!(Grain::Auto.chunk_size(1_000_000), 7813); // ~128 chunks
+/// assert_eq!(Grain::Auto.chunk_size(100), Grain::AUTO_MIN_CHUNK); // small input: one chunk
+/// assert_eq!(Grain::Fixed(256).chunk_size(1_000_000), 256);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Grain {

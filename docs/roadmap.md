@@ -14,7 +14,7 @@ Legend: ✅ done · 🚧 in progress · 📋 planned
 | M3 | 0.3.0 | Async tasks and the `frame_sim` vertical slice | ✅ |
 | M4 | 0.4.0 | Observability and tuning | ✅ |
 | M5 | 0.5.0 | Hardening: determinism, fuzz, bench gate, semver | ✅ (M5a is PR #8, M5b is PR #9; landed in `main` as a single squash, #8) |
-| M6 | 1.0.0 | Stable API, publication | 🚧 (M6a: API review, 0.6.0; M6b: documentation in English; M6d: MSRV and versioning policy) |
+| M6 | 1.0.0 | Stable API, publication | 🚧 (M6a: API review, 0.6.0; M6b: documentation in English; M6c: rustdoc and the embedding section; M6d: MSRV and versioning policy) |
 
 ---
 
@@ -205,7 +205,9 @@ both OSes, nightly fuzz/soak run on schedule; large inputs give errors instead o
   (M6a, 0.6.0, DECISIONS #42): `pragma_sync` internals moved to `__private` outside semver, no
   `tracing`/`crossbeam` re-exports, `puffin` outside semver, `#[non_exhaustive]` on error variants
 - [x] Documentation language: everything in English (M6b, DECISIONS #43, supersedes #11)
-- [ ] Complete rustdoc with examples, a guide "How to embed pragma.core in your engine"
+- [x] Complete rustdoc with examples and an "Integrating into an engine" section in the `pragma_core`
+  crate docs instead of a separate guide (M6c, DECISIONS #46): an example on every public type and
+  free function and on the main methods, all of them doctests
 - [x] MSRV and versioning policy in the README (M6d, DECISIONS #44)
 - [ ] Publication on crates.io
 

@@ -6,6 +6,31 @@ use crate::primitives::{AtomicUsize, Condvar, Mutex, Ordering};
 ///
 /// The base primitive for `join`/`scope`: the waiting thread waits for N tasks to finish.
 /// The fast path (`is_released`) is a single atomic load without locking.
+///
+/// Unlike [`AtomicCounter`](crate::AtomicCounter), the count is fixed at creation and only goes
+/// down: once open, the latch stays open.
+///
+/// ```
+/// use pragma_sync::CountLatch;
+/// use std::sync::Arc;
+///
+/// // The main thread waits until both loaders have finished.
+/// let loaded = Arc::new(CountLatch::new(2));
+/// let loaders: Vec<_> = (0..2)
+///     .map(|_| {
+///         let loaded = Arc::clone(&loaded);
+///         std::thread::spawn(move || {
+///             // ... load something ...
+///             loaded.count_down();
+///         })
+///     })
+///     .collect();
+/// loaded.wait();
+/// # for l in loaders { l.join().unwrap(); }
+/// assert_eq!(loaded.remaining(), 0);
+/// loaded.count_down(); // no underflow on an open latch
+/// assert!(loaded.is_released());
+/// ```
 #[derive(Debug)]
 pub struct CountLatch {
     remaining: AtomicUsize,

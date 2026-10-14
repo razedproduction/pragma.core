@@ -8,6 +8,24 @@ use crate::BaseError;
 ///
 /// Removing a value bumps the slot's generation, so an old handle
 /// never addresses a new value in the same slot.
+///
+/// A handle is `Copy` and does not borrow the pool: it can be stored in other structures and
+/// passed between threads, and the pool decides on every access whether it is still valid.
+///
+/// ```
+/// use pragma_base::HandlePool;
+///
+/// let mut pool = HandlePool::new();
+/// let old = pool.insert("first")?;
+/// pool.remove(old)?;
+/// let new = pool.insert("second")?; // reuses the slot
+///
+/// assert_eq!(old.index(), new.index());
+/// assert_ne!(old.generation(), new.generation());
+/// assert_eq!(pool.get(old), None);
+/// assert_eq!(pool.get(new), Some(&"second"));
+/// # Ok::<(), pragma_base::BaseError>(())
+/// ```
 pub struct Handle<T> {
     index: u32,
     generation: u32,
@@ -66,6 +84,30 @@ struct Slot<T> {
 }
 
 /// A pool of values addressed by [`Handle`]. Freed slots are reused.
+///
+/// Every operation is O(1). The pool is a plain single-threaded container (`&mut self` to change
+/// it); share it between threads the way you would share a `Vec`.
+///
+/// ```
+/// use pragma_base::{BaseError, HandlePool};
+///
+/// struct Sound { volume: f32 }
+///
+/// let mut sounds = HandlePool::new();
+/// let shot = sounds.insert(Sound { volume: 0.5 })?;
+///
+/// if let Some(sound) = sounds.get_mut(shot) {
+///     sound.volume = 1.0;
+/// }
+/// assert_eq!(sounds.len(), 1);
+///
+/// let removed = sounds.remove(shot)?;
+/// assert_eq!(removed.volume, 1.0);
+/// // The handle is stale now: lookups give `None`, a second removal is an error.
+/// assert!(sounds.get(shot).is_none());
+/// assert!(matches!(sounds.remove(shot), Err(BaseError::StaleHandle { .. })));
+/// # Ok::<(), BaseError>(())
+/// ```
 pub struct HandlePool<T> {
     slots: Vec<Slot<T>>,
     free: Vec<u32>,

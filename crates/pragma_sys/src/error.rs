@@ -1,4 +1,22 @@
 /// Errors of the platform layer.
+///
+/// Platform tuning is optional, so most callers log the error and carry on:
+///
+/// ```
+/// use pragma_sys::{SysError, ThreadPriority, set_current_thread_priority};
+///
+/// std::thread::spawn(|| {
+///     if let Err(err) = set_current_thread_priority(ThreadPriority::Low) {
+///         match err {
+///             SysError::Unsupported { op, .. } => eprintln!("{op}: not on this platform"),
+///             other => eprintln!("priority not changed: {other}"),
+///         }
+///     }
+/// })
+/// .join()
+/// .map_err(|_| "thread panicked")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SysError {

@@ -1013,6 +1013,24 @@ fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, setup: Thr
 /// Created with [`ThreadPool::new`]; `Drop` stops and `join`s all threads
 /// (see [`ShutdownPolicy`]). A panic in a task does not kill the worker and is returned as
 /// [`JobError::Panicked`](crate::JobError::Panicked).
+///
+/// An engine usually creates one pool for the lifetime of the process and passes `&ThreadPool`
+/// to its systems. The thread that calls `scope`/`join`/`parallel_*` (typically the main thread)
+/// takes part in the work while it waits, which is why the default config has one worker fewer
+/// than there are cores.
+///
+/// ```
+/// use pragma_jobs::{PoolConfig, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_name_prefix("engine-worker"))?;
+/// assert!(pool.workers() >= 1);
+///
+/// let (left, right) = pool.join(|| (0..1000_u64).sum::<u64>(), || (1000..2000_u64).sum::<u64>())?;
+/// assert_eq!(left + right, (0..2000).sum());
+///
+/// drop(pool); // drains the queues and joins every worker thread
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct ThreadPool {
     pub(crate) shared: Arc<Shared>,
     threads: Vec<JoinHandle<()>>,
@@ -1052,6 +1070,18 @@ impl ThreadPool {
     ///
     /// If the OS refuses to create a thread, the threads already started are stopped and `join`ed,
     /// and [`JobsError::SpawnFailed`] is returned.
+    ///
+    /// ```
+    /// use pragma_jobs::{JobsError, PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(3))?;
+    /// assert_eq!(pool.workers(), 3);
+    ///
+    /// // An invalid config is rejected before any thread is started.
+    /// let err = ThreadPool::new(PoolConfig::default().with_workers(0)).unwrap_err();
+    /// assert!(matches!(err, JobsError::InvalidConfig { .. }));
+    /// # Ok::<(), JobsError>(())
+    /// ```
     pub fn new(config: PoolConfig) -> Result<Self, JobsError> {
         let config = config.validate()?;
         let workers = config.workers();
@@ -1176,6 +1206,23 @@ impl ThreadPool {
 
     /// The index of this pool's worker the call runs on (`None`: the thread is not a worker
     /// of this pool, for example the main thread inside `scope`).
+    ///
+    /// Useful for per-worker scratch buffers: index an array of `workers()` buffers with it.
+    ///
+    /// ```
+    /// use pragma_jobs::{PoolConfig, Priority, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// assert_eq!(pool.current_worker_index(), None); // the main thread
+    /// assert!(!pool.is_worker_thread());
+    ///
+    /// let pool = std::sync::Arc::new(pool);
+    /// let inner = std::sync::Arc::clone(&pool);
+    /// let index = pool.spawn(Priority::Normal, move || inner.current_worker_index());
+    /// // `join` may run the task on the waiting thread itself (help-while-wait), so either is fine:
+    /// assert!(matches!(index.join()?, None | Some(0..=1)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[must_use]
     pub fn current_worker_index(&self) -> Option<usize> {
         current_worker_of(&self.shared)

@@ -60,6 +60,10 @@ pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> 
 /// Neither allocates nor blocks, so it is fit for a panic hook. The label is borrowed only for
 /// the duration of `f`: it (or the name) cannot be moved out; copy what you need.
 ///
+/// Labels are set by the scheduler itself (pool tasks, graph nodes, async tasks, and
+/// `pragma_jobs::labeled` for the application's own code). The example sets them by hand through
+/// the internal `run_labeled` only to stay inside this crate:
+///
 /// ```
 /// use pragma_sync::__private::run_labeled;
 /// use pragma_sync::current_label;
@@ -76,6 +80,22 @@ pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> 
 /// });
 /// assert!(current_label(|label| label.is_none()));
 /// ```
+///
+/// A panic hook that names the culprit (the hook runs on the panicking thread, before unwinding):
+///
+/// ```
+/// use pragma_sync::current_label;
+///
+/// let default_hook = std::panic::take_hook();
+/// std::panic::set_hook(Box::new(move |info| {
+///     current_label(|label| match label {
+///         Some(label) => eprintln!("panic in task {label}"),
+///         None => eprintln!("panic outside pool tasks"),
+///     });
+///     default_hook(info);
+/// }));
+/// # let _ = std::panic::take_hook();
+/// ```
 pub fn current_label<R>(f: impl for<'a> FnOnce(Option<TaskLabel<'a>>) -> R) -> R {
     let frame = CURRENT.try_with(Cell::get).unwrap_or(ptr::null());
     // SAFETY: `CURRENT` is either null or points to a `Frame` on the stack of a `run_labeled` call
@@ -88,6 +108,23 @@ pub fn current_label<R>(f: impl for<'a> FnOnce(Option<TaskLabel<'a>>) -> R) -> R
 }
 
 /// A task label (see [`current_label`]).
+///
+/// Borrowed from the thread's label stack for the duration of the [`current_label`] closure, so it
+/// is `!Send` and cannot be stored; `Display` prints the whole chain, innermost first.
+///
+/// ```
+/// use pragma_sync::__private::run_labeled;
+/// use pragma_sync::current_label;
+///
+/// run_labeled("graph", "ai", || {
+///     run_labeled("spawn", "path", || {
+///         let kinds: Vec<&str> = current_label(|label| {
+///             label.map(|l| l.chain().map(|l| l.kind()).collect()).unwrap_or_default()
+///         });
+///         assert_eq!(kinds, ["spawn", "graph"]);
+///     });
+/// });
+/// ```
 #[derive(Clone, Copy)]
 pub struct TaskLabel<'a> {
     frame: &'a Frame,

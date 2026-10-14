@@ -27,6 +27,23 @@ enum State<T> {
 /// - The bridge into the frame is [`poll_ready`](Self::poll_ready): a non-blocking check at the start of a frame.
 /// - From another async task the handle is awaited with `.await` (it implements `Future` itself).
 /// - [`wait`](Self::wait) blocks the thread, but only outside pool work.
+///
+/// ```
+/// use pragma_async::{AsyncConfig, AsyncError, Executor};
+/// use pragma_jobs::{PoolConfig, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+/// let exec = Executor::new(&pool, AsyncConfig::default())?;
+///
+/// // Fire-and-forget: without `detach`, dropping the handle would cancel the task.
+/// exec.spawn_async(async { /* write a save file */ }).detach();
+///
+/// // Blocking inside pool work is refused instead of hanging the pool.
+/// let task = exec.spawn_async(async { 1 });
+/// let (inside, _) = pool.join(move || task.wait(), || ())?;
+/// assert_eq!(inside, Err(AsyncError::WouldBlock));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[must_use = "dropping the handle cancels the task; use detach() to let it run to completion"]
 pub struct AsyncHandle<T> {
     state: State<T>,
@@ -73,6 +90,34 @@ impl<T> AsyncHandle<T> {
     ///
     /// This is the "async → frame" bridge: called, for example, at the start of a frame. The result is
     /// handed out once; a repeated call returns `Some(Err(AsyncError::Consumed))`.
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, AsyncError, AsyncHandle, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(&pool, AsyncConfig::default())?;
+    ///
+    /// // The handle lives in the game state; each frame checks it once.
+    /// let mut pending: Option<AsyncHandle<Vec<u8>>> = Some(exec.unblock(|| vec![7; 4]));
+    /// let mut mesh = None;
+    /// while mesh.is_none() {
+    ///     if let Some(result) = pending.as_mut().and_then(AsyncHandle::poll_ready) {
+    ///         mesh = Some(result?);
+    ///         pending = None;
+    ///     }
+    ///     // ... run the frame ...
+    ///     std::thread::yield_now();
+    /// }
+    /// assert_eq!(mesh.as_deref(), Some(&[7_u8; 4][..]));
+    ///
+    /// let mut done = exec.spawn_async(async {});
+    /// while done.poll_ready().is_none() {
+    ///     std::thread::yield_now();
+    /// }
+    /// assert_eq!(done.poll_ready(), Some(Err(AsyncError::Consumed)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn poll_ready(&mut self) -> Option<Result<T, AsyncError>> {
         let mut cx = Context::from_waker(Waker::noop());
         match self.poll_inner(&mut cx) {
@@ -87,6 +132,18 @@ impl<T> AsyncHandle<T> {
     /// `scope`/`join`) it returns [`AsyncError::WouldBlock`] without waiting, because blocking there
     /// would delay the frame, and on a single worker it would hang the pool. A loading screen
     /// between frames is an example of a valid use.
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(&pool, AsyncConfig::default())?;
+    /// // A loading screen: no frame is running, so the main thread may block.
+    /// let config = exec.unblock(|| String::from("fullscreen = true")).wait()?;
+    /// assert!(config.contains("fullscreen"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn wait(self) -> Result<T, AsyncError> {
         if self.spawner.in_pool_context() {
             return Err(AsyncError::WouldBlock);

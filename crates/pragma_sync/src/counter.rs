@@ -15,6 +15,27 @@ const HELP_RECHECK: Duration = Duration::from_micros(500);
 /// Instead of a handle per task: a group of tasks increments the counter on creation and decrements
 /// it on completion, and the waiter waits for a single "counter reached zero" event.
 ///
+/// ```
+/// use pragma_sync::AtomicCounter;
+/// use std::sync::Arc;
+///
+/// let pending = Arc::new(AtomicCounter::new(0));
+/// let threads: Vec<_> = (0..4)
+///     .map(|_| {
+///         pending.increment()?; // before the task starts, never inside it
+///         let pending = Arc::clone(&pending);
+///         Ok(std::thread::spawn(move || {
+///             // ... the task's work ...
+///             pending.decrement();
+///         }))
+///     })
+///     .collect::<Result<_, pragma_sync::SyncError>>()?;
+/// pending.wait();
+/// assert!(pending.is_zero());
+/// # for t in threads { t.join().unwrap(); }
+/// # Ok::<(), pragma_sync::SyncError>(())
+/// ```
+///
 /// Wakeup protocol: the waiter registers itself in `waiters` (an RMW) under the mutex and
 /// rechecks the counter; after reaching zero, the decrementer also reads `waiters` via an RMW and
 /// takes the mutex only if it is non-zero. RMWs on `waiters` are totally ordered, so at least
@@ -121,6 +142,25 @@ impl AtomicCounter {
     /// `help` must run one unit of someone else's work and return `true`, or return `false`
     /// if there is no work. Without work, the thread first spins with [`Backoff`], then sleeps on the
     /// counter in short intervals, asking `help` again between them.
+    ///
+    /// ```
+    /// use pragma_sync::AtomicCounter;
+    /// use std::cell::RefCell;
+    ///
+    /// // Work the waiter can run itself instead of sleeping.
+    /// let queue = RefCell::new(vec![1, 2, 3]);
+    /// let pending = AtomicCounter::new(3);
+    /// let mut sum = 0;
+    /// pending.wait_while_helping(|| match queue.borrow_mut().pop() {
+    ///     Some(job) => {
+    ///         sum += job;
+    ///         pending.decrement();
+    ///         true
+    ///     }
+    ///     None => false,
+    /// });
+    /// assert_eq!(sum, 6);
+    /// ```
     pub fn wait_while_helping(&self, mut help: impl FnMut() -> bool) {
         let backoff = Backoff::new();
         while !self.is_zero() {

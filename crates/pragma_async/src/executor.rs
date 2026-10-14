@@ -23,6 +23,28 @@ const UNBLOCK: &str = "unblock";
 /// The executor does not keep the pool alive: once the pool stops, unfinished tasks are cancelled
 /// ([`AsyncError::Cancelled`]). Dropping the last clone cancels blocking tasks not yet taken and
 /// waits for the running ones (synchronous I/O cannot be interrupted).
+///
+/// ```
+/// use pragma_async::{AsyncConfig, AsyncError, Executor};
+/// use pragma_jobs::{PoolConfig, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+/// let exec = Executor::new(&pool, AsyncConfig::default())?;
+///
+/// // A clone inside a future spawns subtasks and awaits their handles.
+/// let sub = exec.clone();
+/// let textures = exec.spawn_async(async move {
+///     let parts: Vec<_> = (0..4_u32).map(|i| sub.spawn_async(async move { i * 10 })).collect();
+///     let mut sum = 0;
+///     for part in parts {
+///         sum += part.await?;
+///     }
+///     Ok::<u32, AsyncError>(sum)
+/// });
+/// assert_eq!(textures.wait()??, 60);
+/// assert!(exec.is_alive());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone)]
 pub struct Executor {
     inner: Arc<Inner>,
@@ -44,6 +66,19 @@ impl std::fmt::Debug for Executor {
 
 impl Executor {
     /// Creates an executor over `pool`. Blocking pool threads are created on demand.
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, AsyncError, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(&pool, AsyncConfig::default().with_blocking_threads(2))?;
+    /// assert_eq!(exec.blocking_threads(), 0); // none started yet
+    ///
+    /// let bad = Executor::new(&pool, AsyncConfig::default().with_blocking_threads(0));
+    /// assert!(matches!(bad, Err(AsyncError::InvalidConfig { .. })));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn new(pool: &ThreadPool, config: AsyncConfig) -> Result<Self, AsyncError> {
         let config = config.validate()?;
         Ok(Self {
@@ -59,6 +94,20 @@ impl Executor {
     /// A panic in the future is caught and returned as [`AsyncError::Panicked`]; the worker
     /// keeps running. Dropping the handle cancels the task. If the pool has stopped, the handle returns
     /// [`AsyncError::Cancelled`].
+    ///
+    /// The future must not block: blocking calls go through [`unblock`](Self::unblock), waiting
+    /// for other tasks through `.await` on their handles.
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(&pool, AsyncConfig::default())?;
+    /// let handle = exec.spawn_async(async { "parsed" });
+    /// assert_eq!(handle.wait()?, "parsed");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn spawn_async<F>(&self, future: F) -> AsyncHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -70,6 +119,22 @@ impl Executor {
     /// Like [`spawn_async`](Self::spawn_async), but with a task name: every `poll` of the future
     /// runs with the label `async`/`name` ([`pragma_jobs::current_task`], for the panic hook and the
     /// watchdog), and the name also goes into [`AsyncError::Panicked`].
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, AsyncError, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(&pool, AsyncConfig::default())?;
+    /// let failed = exec.spawn_async_named("load level", async { panic!("bad header") }).wait();
+    /// match failed {
+    ///     Err(AsyncError::Panicked { task, message, .. }) => {
+    ///         assert_eq!((task, message.as_str()), ("load level", "bad header"));
+    ///     }
+    ///     other => panic!("unexpected {other:?}"),
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn spawn_async_named<F>(&self, name: &'static str, future: F) -> AsyncHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -100,6 +165,33 @@ impl Executor {
     /// holds [`AsyncError::Overloaded`]. It works both from a future (`.await` on the handle) and
     /// from a frame (`poll_ready`). Dropping the handle before the start cancels the task; a started one
     /// runs to completion and its result is discarded. A panic is [`AsyncError::Panicked`].
+    ///
+    /// ```
+    /// use pragma_async::{AsyncConfig, AsyncError, Executor};
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    /// use std::sync::mpsc;
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let exec = Executor::new(
+    ///     &pool,
+    ///     AsyncConfig::default().with_blocking_threads(1).with_blocking_capacity(1),
+    /// )?;
+    ///
+    /// // `std::fs::read(path)` would go here; the frame workers stay free meanwhile.
+    /// let (release, gate) = mpsc::channel::<()>();
+    /// let read = exec.unblock(move || {
+    ///     gate.recv().ok();
+    ///     vec![0_u8; 16]
+    /// });
+    ///
+    /// // The queue is full (capacity 1): no waiting, an immediate error instead.
+    /// let mut extra = exec.unblock(|| ());
+    /// assert!(matches!(extra.poll_ready(), Some(Err(AsyncError::Overloaded { .. }))));
+    ///
+    /// release.send(())?;
+    /// assert_eq!(read.wait()?.len(), 16);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn unblock<F, T>(&self, f: F) -> AsyncHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,

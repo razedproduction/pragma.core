@@ -46,6 +46,29 @@ pub(crate) enum Borrow {
 /// not a wait. The graph does not own the resources: the same graph can run over different
 /// `Resources` instances (for example over an "extract" copy of the state for rendering).
 ///
+/// ```
+/// use pragma_graph::Resources;
+///
+/// struct Score(u32);
+/// struct Settings { volume: f32 }
+///
+/// let mut res = Resources::new();
+/// assert!(res.insert(Score(0)).is_none());
+/// res.insert(Settings { volume: 0.8 });
+///
+/// // Between frames the owner changes resources directly, without locks.
+/// if let Some(score) = res.get_mut::<Score>() {
+///     score.0 += 10;
+/// }
+/// assert_eq!(res.get::<Score>().map(|s| s.0), Some(10));
+///
+/// let old = res.insert(Score(99)); // one value per type: replaces and returns the old one
+/// assert_eq!(old.map(|s| s.0), Some(10));
+/// assert_eq!(res.remove::<Settings>().map(|s| s.volume), Some(0.8));
+/// assert!(!res.contains::<Settings>());
+/// assert_eq!(res.len(), 1);
+/// ```
+///
 /// [`GraphError::BorrowConflict`]: crate::GraphError::BorrowConflict
 #[derive(Default)]
 pub struct Resources {
@@ -152,6 +175,18 @@ impl Resources {
 }
 
 /// A resource borrowed for reading.
+///
+/// Dereferences to `T`; returned by [`TaskContext::read`](crate::TaskContext::read) and
+/// [`Resources::get`]. Drop it as soon as the data is no longer needed.
+///
+/// ```
+/// use pragma_graph::Resources;
+///
+/// let mut res = Resources::new();
+/// res.insert(vec![1, 2, 3]);
+/// let numbers = res.get::<Vec<i32>>();
+/// assert_eq!(numbers.as_deref().map(Vec::len), Some(3));
+/// ```
 pub struct Res<'a, T>(RwLockReadGuard<'a, T>);
 
 impl<T> Deref for Res<'_, T> {
@@ -169,6 +204,12 @@ impl<T: fmt::Debug> fmt::Debug for Res<'_, T> {
 }
 
 /// A resource borrowed for writing.
+///
+/// Dereferences to `&mut T`; returned by [`TaskContext::write`](crate::TaskContext::write) (see
+/// the [`TaskContext`](crate::TaskContext) example). Taking the same resource twice in one task
+/// while the first guard is alive is a [`GraphError::BorrowConflict`].
+///
+/// [`GraphError::BorrowConflict`]: crate::GraphError::BorrowConflict
 pub struct ResMut<'a, T>(RwLockWriteGuard<'a, T>);
 
 impl<T> Deref for ResMut<'_, T> {

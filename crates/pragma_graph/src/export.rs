@@ -60,6 +60,21 @@ fn mermaid_escape(s: &str) -> String {
 impl FrameGraph {
     /// The graph in Graphviz DOT format (`dot -Tsvg graph.dot`): tasks with their declared access
     /// and the edges after transitive reduction.
+    ///
+    /// ```
+    /// use pragma_graph::FrameGraph;
+    ///
+    /// struct Bodies;
+    ///
+    /// let mut g = FrameGraph::builder();
+    /// g.task("physics", |t| t.writes::<Bodies>(), |_| ());
+    /// g.task("render", |t| t.reads::<Bodies>().after("physics"), |_| ());
+    /// let dot = g.build()?.to_dot();
+    /// assert!(dot.contains("t0 [label=\"physics\\nW: Bodies\"];"));
+    /// assert!(dot.contains("t0 -> t1;"));
+    /// // std::fs::write("frame.dot", dot)?;  then: dot -Tsvg frame.dot -o frame.svg
+    /// # Ok::<(), pragma_graph::GraphError>(())
+    /// ```
     #[must_use]
     pub fn to_dot(&self) -> String {
         let mut out = String::from("digraph frame {\n    rankdir=LR;\n    node [shape=box];\n");
@@ -81,6 +96,18 @@ impl FrameGraph {
     }
 
     /// The graph in Mermaid format (`flowchart LR`), for example to embed in Markdown.
+    ///
+    /// ```
+    /// use pragma_graph::FrameGraph;
+    ///
+    /// let mut g = FrameGraph::builder();
+    /// g.task("input", |t| t, |_| ());
+    /// g.task("ui", |t| t.after("input"), |_| ());
+    /// let mermaid = g.build()?.to_mermaid();
+    /// assert!(mermaid.starts_with("flowchart LR\n"));
+    /// assert!(mermaid.contains("t0 --> t1"));
+    /// # Ok::<(), pragma_graph::GraphError>(())
+    /// ```
     #[must_use]
     pub fn to_mermaid(&self) -> String {
         let mut out = String::from("flowchart LR\n");

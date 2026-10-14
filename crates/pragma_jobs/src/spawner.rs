@@ -75,6 +75,17 @@ impl Spawner {
     /// Whether the current thread is doing this pool's work: it is one of its workers or an external
     /// thread inside `scope`/`join`/[`JobHandle::join`](crate::JobHandle::join) (for example the main
     /// thread during a graph frame). A blocking wait here would delay the frame or hang the pool.
+    ///
+    /// ```
+    /// use pragma_jobs::{PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let spawner = pool.spawner();
+    /// assert!(!spawner.in_pool_context()); // plain main thread: blocking is fine
+    /// let (inside, _) = pool.join(|| spawner.in_pool_context(), || ())?;
+    /// assert!(inside); // inside `join`: do not block
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[must_use]
     pub fn in_pool_context(&self) -> bool {
         self.shared.upgrade().is_some_and(|s| s.in_context())
