@@ -1,12 +1,12 @@
-# cargo-deny: лицензии, advisories, запрет встроенного C/C++.
-# Запуск: cargo deny check
+# cargo-deny: licenses, advisories, a ban on bundled C/C++.
+# Run: cargo deny check
 
 [graph]
 all-features = true
-# Поддерживаемые платформы (DECISIONS.md #2). Заодно исключает `[target.'cfg(loom)']`:
-# `loom` — не целевой cfg, а флаг модель-чекинга (DECISIONS.md #12).
+# Supported platforms (DECISIONS.md #2). This also excludes `[target.'cfg(loom)']`:
+# `loom` is not a target cfg but a model-checking flag (DECISIONS.md #12).
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
-# dev-зависимости (criterion, loom, proptest) в бинарники пользователей не попадают.
+# Dev dependencies (criterion, loom, proptest) never reach users' binaries.
 exclude-dev = true
 
 [advisories]

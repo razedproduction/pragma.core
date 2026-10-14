@@ -1,10 +1,10 @@
-//! L2: work-stealing job system `pragma.core`.
+//! L2: the work-stealing job system of `pragma.core`.
 //!
-//! Пул рабочих потоков ([`ThreadPool`]) с локальными LIFO-очередями, глобальными очередями
-//! по приоритетам и кражей задач (`docs/architecture.md` §3.1–3.2). Любое ожидание
-//! (`join`, `scope`, [`JobHandle::join`]) исполняет чужие задачи, пока ждёт своих
-//! (help-while-wait), поэтому вложенный параллелизм не дедлочит даже на одном воркере.
-//! Паника в задаче перехватывается и возвращается как [`JobError::Panicked`].
+//! A pool of worker threads ([`ThreadPool`]) with local LIFO queues, global per-priority
+//! queues and work stealing (`docs/architecture.md` §3.1–3.2). Any wait
+//! (`join`, `scope`, [`JobHandle::join`]) runs other tasks while waiting for its own
+//! (help-while-wait), so nested parallelism does not deadlock even on a single worker.
+//! A panic in a task is caught and returned as [`JobError::Panicked`].
 //!
 //! ```
 //! use pragma_jobs::{Grain, PoolConfig, Priority, ThreadPool};
@@ -15,7 +15,7 @@
 //! let (a, b) = pool.join(|| 1 + 1, || 2 + 2)?;
 //! assert_eq!((a, b), (2, 4));
 //!
-//! // задачи заимствуют данные со стека
+//! // tasks borrow data from the stack
 //! let mut data = vec![1_u32; 1000];
 //! pool.scope(|s| {
 //!     for chunk in data.chunks_mut(100) {
@@ -28,26 +28,26 @@
 //! let sum = pool.parallel_reduce(&data, Grain::Fixed(64), |_, c| c.iter().sum::<u32>(), |a, b| a + b)?;
 //! assert_eq!(sum, Some(3000));
 //!
-//! // 'static-задача с хэндлом; паника не роняет процесс
+//! // a 'static task with a handle; a panic does not bring the process down
 //! let handle = pool.spawn(Priority::Background, || -> u32 { panic!("bake failed") });
 //! assert!(handle.join().is_err());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! ## Наблюдаемость (`docs/architecture.md` §5)
+//! ## Observability (`docs/architecture.md` §5)
 //!
-//! - [`ThreadPool::stats`] — метрики пула ([`PoolStats`]) без остановки воркеров.
-//! - [`current_task`] — метка задачи, исполняемой на этом потоке (для panic hook и
-//!   крэш-репортов); метки ставит [`labeled`]. Метки получают задачи графа (`graph`),
-//!   [`ThreadPool::spawn`] (`spawn`), задачи [`Scope::spawn`] и `parallel_*` (`scope`),
-//!   [`Spawner::spawn_detached`] (`detached`) и async-задачи `pragma_async` (`async`,
-//!   `unblock`). Вторая ветвь `join` метки не получает: это горячий путь, а её имя
-//!   ничего бы не сказало — виновника назовёт внешняя метка.
-//! - Watchdog зависших задач в debug-сборках ([`PoolConfig::with_watchdog`]).
-//! - `tracing`: span `scope`/`parallel_for`/`parallel_reduce` на уровне `TRACE`; уровни
-//!   отключаются при компиляции фичами `tracing` (`max_level_*`, `release_max_level_*`).
-//! - Feature `puffin`: те же области — в профайлере кадра `puffin`.
-//! - [`sys`]: имена, приоритеты потоков и привязка к ядрам (крейт `pragma_sys`).
+//! - [`ThreadPool::stats`]: pool metrics ([`PoolStats`]) without stopping the workers.
+//! - [`current_task`]: the label of the task running on this thread (for the panic hook and
+//!   crash reports); labels are set by [`labeled`]. Labels are given to graph tasks (`graph`),
+//!   [`ThreadPool::spawn`] (`spawn`), [`Scope::spawn`] and `parallel_*` tasks (`scope`),
+//!   [`Spawner::spawn_detached`] (`detached`) and `pragma_async` async tasks (`async`,
+//!   `unblock`). The second branch of `join` gets no label: it is a hot path, and its name
+//!   would say nothing anyway; the outer label names the culprit.
+//! - A watchdog for stuck tasks in debug builds ([`PoolConfig::with_watchdog`]).
+//! - `tracing`: `scope`/`parallel_for`/`parallel_reduce` spans at `TRACE` level; levels
+//!   are compiled out with the `tracing` features (`max_level_*`, `release_max_level_*`).
+//! - Feature `puffin`: the same regions in the `puffin` frame profiler.
+//! - [`sys`]: thread names, priorities and core pinning (the `pragma_sys` crate).
 #![forbid(unsafe_code)]
 
 mod config;
@@ -71,15 +71,15 @@ pub use scope::Scope;
 pub use spawner::Spawner;
 pub use stats::{PoolStats, ThreadStats};
 
-/// Платформенный слой: имена, приоритеты потоков и привязка к ядрам (re-export
-/// `pragma_sys`; `unsafe` FFI живёт там, DECISIONS #27).
+/// The platform layer: thread names, priorities and core pinning (a re-export of
+/// `pragma_sys`; the `unsafe` FFI lives there, DECISIONS #27).
 pub use pragma_sys as sys;
 
-/// Исполняет `f` с меткой задачи `kind`/`name` на текущем потоке.
+/// Runs `f` with the task label `kind`/`name` on the current thread.
 ///
-/// Метку видит [`current_task`] (в том числе из panic hook) — так приложение называет
-/// виновника падения. В debug-сборках задача на потоке пула ещё и отмечается для watchdog
-/// ([`PoolConfig::with_watchdog`]). В release — две записи в TLS, без аллокаций.
+/// The label is visible to [`current_task`] (including from the panic hook); this is how the
+/// application names the culprit of a crash. In debug builds, a task on a pool thread is also
+/// registered with the watchdog ([`PoolConfig::with_watchdog`]). In release it is two TLS writes, no allocations.
 ///
 /// ```
 /// use pragma_jobs::{current_task, labeled};
@@ -88,7 +88,7 @@ pub use pragma_sys as sys;
 /// assert_eq!(name.as_deref(), Some("level.bin"));
 /// ```
 ///
-/// Panic hook, который называет задачу (без аллокаций до форматирования отчёта):
+/// A panic hook that names the task (no allocations before formatting the report):
 ///
 /// ```no_run
 /// std::panic::set_hook(Box::new(|info| {
@@ -104,8 +104,8 @@ pub fn labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> R {
     pragma_sync::__private::run_labeled(kind, name, f)
 }
 
-/// Приоритет задачи пула, которую исполняет текущий поток; `None` — поток сейчас не
-/// исполняет задачу пула (например, главный поток в теле `scope` или вне пула).
+/// The priority of the pool task the current thread is running; `None` if the thread is not
+/// running a pool task right now (for example the main thread in a `scope` body or outside the pool).
 #[must_use]
 pub fn current_priority() -> Option<Priority> {
     pool::current_priority()

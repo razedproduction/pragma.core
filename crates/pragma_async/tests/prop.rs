@@ -1,5 +1,5 @@
-//! Много async-задач со случайной отменой и паниками: каждая неотменённая задача даёт
-//! ожидаемый исход, каждый future сброшен ровно один раз, ничего не виснет.
+//! Many async tasks with random cancellation and panics: every task that is not cancelled gives
+//! the expected outcome, every future is dropped exactly once, and nothing hangs.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -20,7 +20,7 @@ use proptest::prelude::*;
 enum Outcome {
     Value,
     Panic,
-    /// Никогда не завершается: такую задачу обязательно отменяют.
+    /// Never finishes: such a task is always cancelled.
     Pending,
 }
 
@@ -129,18 +129,18 @@ proptest! {
     }
 }
 
-/// Длинный стресс: `cargo test -p pragma_async --release -- --ignored`.
+/// A long stress run: `cargo test -p pragma_async --release -- --ignored`.
 #[test]
 #[ignore = "long stress; run in nightly CI"]
 fn stress_many_tasks_random_cancel_and_panics() {
-    // Soak в ночном CI: `PRAGMA_SOAK_ROUNDS` удлиняет прогон, `PRAGMA_SOAK_SEED` меняет поток.
+    // Soak in nightly CI: `PRAGMA_SOAK_ROUNDS` lengthens the run, `PRAGMA_SOAK_SEED` changes the stream.
     let env = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok());
     let soak_rounds = usize::try_from(env("PRAGMA_SOAK_ROUNDS").unwrap_or(1).max(1)).unwrap();
     let seed = env("PRAGMA_SOAK_SEED").unwrap_or(0);
     if seed != 0 {
         eprintln!("PRAGMA_SOAK_SEED={seed}");
     }
-    // xorshift не выходит из нуля, поэтому seed подмешивается в ненулевую константу.
+    // xorshift never leaves zero, so the seed is mixed into a non-zero constant.
     let mut x: u64 = 0x2545_F491_4F6C_DD1D ^ seed;
     if x == 0 {
         x = 0x2545_F491_4F6C_DD1D;

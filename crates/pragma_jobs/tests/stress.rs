@@ -1,6 +1,6 @@
-//! Стресс-тесты (долгие): `cargo test -p pragma_jobs --release --test stress -- --ignored`.
-//! В CI — ночной workflow `.github/workflows/nightly.yml`.
-// Тестовый код: паника = провал теста, переполнение исключено размерами входа.
+//! Stress tests (long-running): `cargo test -p pragma_jobs --release --test stress -- --ignored`.
+//! In CI: the nightly workflow `.github/workflows/nightly.yml`.
+// Test code: a panic is a test failure; overflow is ruled out by the input sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -19,7 +19,7 @@ fn worker_counts() -> Vec<usize> {
     counts
 }
 
-/// Множитель длины soak-прогона (`PRAGMA_SOAK_ROUNDS`, ночной CI); по умолчанию 1.
+/// Soak run length multiplier (`PRAGMA_SOAK_ROUNDS`, nightly CI); defaults to 1.
 fn soak_rounds() -> u64 {
     std::env::var("PRAGMA_SOAK_ROUNDS")
         .ok()
@@ -28,7 +28,7 @@ fn soak_rounds() -> u64 {
         .max(1)
 }
 
-/// Seed случайных паник (`PRAGMA_SOAK_SEED`): ночной CI меняет его каждую ночь.
+/// Seed of the random panics (`PRAGMA_SOAK_SEED`): nightly CI changes it every night.
 fn soak_seed() -> u64 {
     let seed = std::env::var("PRAGMA_SOAK_SEED")
         .ok()
@@ -40,7 +40,7 @@ fn soak_seed() -> u64 {
     seed
 }
 
-/// Дешёвый детерминированный генератор, чтобы паники были «случайными», но воспроизводимыми.
+/// A cheap deterministic generator, so that panics are "random" yet reproducible.
 fn hash(mut x: u64) -> u64 {
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
@@ -49,7 +49,7 @@ fn hash(mut x: u64) -> u64 {
 }
 
 #[test]
-#[ignore = "долгий: 10^7 задач"]
+#[ignore = "long: 10^7 tasks"]
 fn ten_million_tiny_tasks() {
     const TASKS: u64 = 10_000_000;
     const PER_SCOPE: u64 = 10_000;
@@ -78,9 +78,9 @@ fn ten_million_tiny_tasks() {
 }
 
 #[test]
-#[ignore = "долгий: случайные паники во вложенных join/scope"]
+#[ignore = "long: random panics in nested join/scope"]
 fn random_panics_never_hang_or_kill_workers() {
-    // Тысячи ожидаемых паник: не засоряем вывод.
+    // Thousands of expected panics: keep the output clean.
     std::panic::set_hook(Box::new(|_| {}));
     let rounds = 2_000 * soak_rounds();
     let seed = soak_seed();
@@ -105,7 +105,7 @@ fn random_panics_never_hang_or_kill_workers() {
                             },
                         );
                         if r.is_err() {
-                            // Паника в одной ветви не мешает обработать результат другой.
+                            // A panic in one branch does not prevent handling the other's result.
                         }
                     });
                 }
@@ -125,7 +125,7 @@ fn random_panics_never_hang_or_kill_workers() {
                 Err(other) => panic!("unexpected {other}"),
             }
         }
-        // Пул по-прежнему исправен.
+        // The pool still works.
         let mut v = vec![1_u64; 100_000];
         pool.parallel_for(&mut v, Grain::Auto, |x| *x += 1).unwrap();
         assert!(v.iter().all(|&x| x == 2));
@@ -137,7 +137,7 @@ fn random_panics_never_hang_or_kill_workers() {
 }
 
 #[test]
-#[ignore = "долгий: многократное создание и уничтожение пула"]
+#[ignore = "long: repeated pool creation and destruction"]
 fn create_drop_cycles_do_not_leak_or_hang() {
     for i in 0..500 * soak_rounds() {
         let workers = usize::try_from(1 + i % 8).unwrap();

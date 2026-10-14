@@ -2,10 +2,10 @@ use std::sync::PoisonError;
 
 use crate::primitives::{AtomicUsize, Condvar, Mutex, Ordering};
 
-/// Счётная защёлка: `wait` блокирует, пока счётчик не дойдёт до нуля.
+/// A count-down latch: `wait` blocks until the counter reaches zero.
 ///
-/// Базовый примитив для `join`/`scope`: ожидающий поток ждёт завершения N задач.
-/// Быстрый путь (`is_released`) — одна атомарная загрузка без блокировок.
+/// The base primitive for `join`/`scope`: the waiting thread waits for N tasks to finish.
+/// The fast path (`is_released`) is a single atomic load without locking.
 #[derive(Debug)]
 pub struct CountLatch {
     remaining: AtomicUsize,
@@ -14,7 +14,7 @@ pub struct CountLatch {
 }
 
 impl CountLatch {
-    /// Защёлка, ожидающая `count` вызовов [`count_down`](Self::count_down).
+    /// A latch waiting for `count` calls to [`count_down`](Self::count_down).
     #[must_use]
     pub fn new(count: usize) -> Self {
         Self {
@@ -24,23 +24,23 @@ impl CountLatch {
         }
     }
 
-    /// Сколько вызовов `count_down` ещё ожидается.
+    /// How many `count_down` calls are still expected.
     #[must_use]
     pub fn remaining(&self) -> usize {
         self.remaining.load(Ordering::Acquire)
     }
 
-    /// Защёлка открыта (счётчик равен нулю).
+    /// Whether the latch is open (the counter is zero).
     #[must_use]
     pub fn is_released(&self) -> bool {
         self.remaining() == 0
     }
 
-    /// Уменьшает счётчик; при достижении нуля будит всех ожидающих.
-    /// Вызов на уже открытой защёлке ничего не делает (без переполнения вниз).
+    /// Decrements the counter; on reaching zero wakes all waiters.
+    /// A call on an already open latch does nothing (no underflow).
     pub fn count_down(&self) {
         let mut current = self.remaining.load(Ordering::Acquire);
-        // CAS-цикл вместо `fetch_update`/`try_update`: одинаково работает на MSRV и новых тулчейнах.
+        // A CAS loop instead of `fetch_update`/`try_update`: works the same on the MSRV and newer toolchains.
         let reached_zero = loop {
             let Some(next) = current.checked_sub(1) else {
                 return;
@@ -56,13 +56,13 @@ impl CountLatch {
             }
         };
         if reached_zero {
-            // Захват мьютекса исключает гонку «проверил счётчик → уснул → пропустил notify».
+            // Taking the mutex rules out the "checked the counter -> fell asleep -> missed notify" race.
             let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
             self.cvar.notify_all();
         }
     }
 
-    /// Блокирует текущий поток до открытия защёлки.
+    /// Blocks the current thread until the latch opens.
     pub fn wait(&self) {
         if self.is_released() {
             return;

@@ -1,4 +1,4 @@
-//! Windows: Win32 API через `windows-sys`.
+//! Windows: the Win32 API via `windows-sys`.
 
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Threading::{
@@ -9,17 +9,17 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::{SysError, ThreadPriority};
 
-/// `GetThreadPriority` при ошибке (`MAXLONG`); в `windows-sys` константы нет.
+/// What `GetThreadPriority` returns on error (`MAXLONG`); `windows-sys` has no constant for it.
 const THREAD_PRIORITY_ERROR_RETURN: i32 = i32::MAX;
 
-/// Наибольшая длина имени потока в единицах UTF-16 (без завершающего нуля).
+/// Maximum thread name length in UTF-16 units (without the terminating nul).
 const MAX_NAME: usize = 256;
 
-/// `SetThreadAffinityMask` адресует ядра одной группы процессоров маской `usize`.
+/// `SetThreadAffinityMask` addresses the cores of one processor group with a `usize` mask.
 const MAX_CORES: usize = usize::BITS as usize;
 
 fn last_error(op: &'static str) -> SysError {
-    // SAFETY: `GetLastError` не имеет предусловий и читает значение потока.
+    // SAFETY: `GetLastError` has no preconditions and reads a per-thread value.
     let code = unsafe { GetLastError() };
     SysError::Os {
         op,
@@ -28,7 +28,7 @@ fn last_error(op: &'static str) -> SysError {
 }
 
 pub(crate) fn set_current_thread_name(name: &str) -> Result<(), SysError> {
-    // Копия под FFI не растёт со входом (reliability §1): длинное имя обрезается по символу.
+    // The FFI copy does not grow with the input (reliability §1): a long name is cut at a character.
     let mut wide: Vec<u16> = Vec::with_capacity(MAX_NAME.saturating_add(1));
     for c in name.chars() {
         let mut buf = [0_u16; 2];
@@ -39,8 +39,8 @@ pub(crate) fn set_current_thread_name(name: &str) -> Result<(), SysError> {
         wide.extend_from_slice(units);
     }
     wide.push(0);
-    // SAFETY: `GetCurrentThread` возвращает псевдохэндл текущего потока (закрывать не нужно);
-    // `wide` — строка UTF-16 с завершающим нулём, живёт до конца вызова и не изменяется.
+    // SAFETY: `GetCurrentThread` returns a pseudo-handle of the current thread (no need to close it);
+    // `wide` is a nul-terminated UTF-16 string that lives until the end of the call and is not modified.
     let hr = unsafe { SetThreadDescription(GetCurrentThread(), wide.as_ptr()) };
     if hr < 0 {
         return Err(SysError::Os {
@@ -57,8 +57,8 @@ pub(crate) fn set_current_thread_priority(priority: ThreadPriority) -> Result<()
         ThreadPriority::Normal => THREAD_PRIORITY_NORMAL,
         ThreadPriority::High => THREAD_PRIORITY_ABOVE_NORMAL,
     };
-    // SAFETY: псевдохэндл текущего потока имеет право `THREAD_SET_INFORMATION`; значение —
-    // одна из документированных констант.
+    // SAFETY: the current-thread pseudo-handle has `THREAD_SET_INFORMATION` access; the value is
+    // one of the documented constants.
     if unsafe { SetThreadPriority(GetCurrentThread(), value) } == 0 {
         return Err(last_error("SetThreadPriority"));
     }
@@ -66,7 +66,7 @@ pub(crate) fn set_current_thread_priority(priority: ThreadPriority) -> Result<()
 }
 
 pub(crate) fn current_thread_priority() -> Result<ThreadPriority, SysError> {
-    // SAFETY: псевдохэндл текущего потока имеет право `THREAD_QUERY_INFORMATION`.
+    // SAFETY: the current-thread pseudo-handle has `THREAD_QUERY_INFORMATION` access.
     let value = unsafe { GetThreadPriority(GetCurrentThread()) };
     if value == THREAD_PRIORITY_ERROR_RETURN {
         return Err(last_error("GetThreadPriority"));
@@ -92,8 +92,8 @@ pub(crate) fn pin_current_thread(core: usize) -> Result<(), SysError> {
             limit: MAX_CORES,
         });
     };
-    // SAFETY: псевдохэндл текущего потока имеет право `THREAD_SET_INFORMATION`; маска с одним
-    // битом. Ядро вне маски процесса — ошибка ОС (возврат 0), а не UB.
+    // SAFETY: the current-thread pseudo-handle has `THREAD_SET_INFORMATION` access; the mask has a
+    // single bit. A core outside the process mask is an OS error (return value 0), not UB.
     if unsafe { SetThreadAffinityMask(GetCurrentThread(), mask) } == 0 {
         return Err(last_error("SetThreadAffinityMask"));
     }
@@ -101,7 +101,7 @@ pub(crate) fn pin_current_thread(core: usize) -> Result<(), SysError> {
 }
 
 pub(crate) fn current_core() -> Option<usize> {
-    // SAFETY: без предусловий; номер ядра в группе текущего потока.
+    // SAFETY: no preconditions; the core number within the current thread's group.
     let core = unsafe { GetCurrentProcessorNumber() };
     usize::try_from(core).ok()
 }

@@ -1,5 +1,5 @@
-//! Единая точка импорта атомиков и блокировок: под `--cfg loom` подменяются моделями `loom`,
-//! чтобы модель-чекер видел каждый атомарный шаг протоколов этого крейта.
+//! The single import point for atomics and locks: under `--cfg loom` they are replaced by `loom`
+//! models, so that the model checker sees every atomic step of this crate's protocols.
 
 #[cfg(loom)]
 pub(crate) use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

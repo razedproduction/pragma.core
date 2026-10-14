@@ -1,5 +1,5 @@
-//! Fuzz построителя графа: произвольное описание → либо ошибка, предсказанная оракулом,
-//! либо корректный стабильный порядок; собранный граф исполняется на пуле и проверяется.
+//! Fuzzing the graph builder: an arbitrary description → either the error predicted by the oracle
+//! or a correct stable order; the built graph is run on a pool and checked.
 #![no_main]
 
 use std::sync::OnceLock;
@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use libfuzzer_sys::fuzz_target;
 use pragma_jobs::{PoolConfig, ThreadPool};
 
-// Тот же оракул, что и в property-тестах `pragma_graph`.
+// The same oracle as in the `pragma_graph` property tests.
 #[path = "../../crates/pragma_graph/tests/oracle/mod.rs"]
 mod oracle;
 
@@ -19,7 +19,7 @@ fn pool() -> &'static ThreadPool {
 }
 
 fuzz_target!(|data: &[u8]| {
-    // Префикс 0xFE — большой граф (лимиты MAX_TASKS / MAX_EDGES → TooLarge, а не abort).
+    // The 0xFE prefix means a large graph (MAX_TASKS / MAX_EDGES limits → TooLarge, not abort).
     if let [0xFE, selector, ..] = data {
         oracle::check_large(*selector);
         return;

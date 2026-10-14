@@ -12,17 +12,17 @@ use crate::{AsyncConfig, AsyncError, AsyncHandle};
 const SPAWN_ASYNC: &str = "spawn_async";
 const UNBLOCK: &str = "unblock";
 
-/// Исполнитель async-задач поверх [`ThreadPool`] (`docs/architecture.md` §3.4).
+/// An async task executor on top of a [`ThreadPool`] (`docs/architecture.md` §3.4).
 ///
-/// - [`spawn_async`](Self::spawn_async): future исполняется на воркерах пула с приоритетом
-///   [`Priority::Background`] — в пределах лимита фоновых воркеров, не вытесняя кадр.
-/// - [`unblock`](Self::unblock): синхронное (блокирующее) замыкание, например чтение файла,
-///   исполняется в отдельном ограниченном blocking-пуле и не занимает воркеры пула.
+/// - [`spawn_async`](Self::spawn_async): the future runs on the pool workers with priority
+///   [`Priority::Background`], within the background worker limit, without displacing the frame.
+/// - [`unblock`](Self::unblock): a synchronous (blocking) closure, for example reading a file,
+///   runs in a separate bounded blocking pool and does not occupy the pool workers.
 ///
-/// Клонируется дёшево (`Arc`), клон можно захватить в future, чтобы запускать подзадачи.
-/// Исполнитель не держит пул живым: после остановки пула незавершённые задачи отменяются
-/// ([`AsyncError::Cancelled`]). Сброс последнего клона отменяет невзятые blocking-задачи и
-/// дожидается выполняющихся (синхронный I/O не прервать).
+/// Cheap to clone (`Arc`); a clone can be captured in a future to spawn subtasks.
+/// The executor does not keep the pool alive: once the pool stops, unfinished tasks are cancelled
+/// ([`AsyncError::Cancelled`]). Dropping the last clone cancels blocking tasks not yet taken and
+/// waits for the running ones (synchronous I/O cannot be interrupted).
 #[derive(Clone)]
 pub struct Executor {
     inner: Arc<Inner>,
@@ -43,7 +43,7 @@ impl std::fmt::Debug for Executor {
 }
 
 impl Executor {
-    /// Создаёт исполнитель над `pool`. Потоки blocking-пула создаются по требованию.
+    /// Creates an executor over `pool`. Blocking pool threads are created on demand.
     pub fn new(pool: &ThreadPool, config: AsyncConfig) -> Result<Self, AsyncError> {
         let config = config.validate()?;
         Ok(Self {
@@ -54,10 +54,10 @@ impl Executor {
         })
     }
 
-    /// Запускает future на воркерах пула с приоритетом [`Priority::Background`].
+    /// Spawns a future on the pool workers with priority [`Priority::Background`].
     ///
-    /// Паника в future перехватывается и возвращается как [`AsyncError::Panicked`]; воркер
-    /// продолжает работу. Сброс хэндла отменяет задачу. Если пул остановлен, хэндл вернёт
+    /// A panic in the future is caught and returned as [`AsyncError::Panicked`]; the worker
+    /// keeps running. Dropping the handle cancels the task. If the pool has stopped, the handle returns
     /// [`AsyncError::Cancelled`].
     pub fn spawn_async<F>(&self, future: F) -> AsyncHandle<F::Output>
     where
@@ -67,9 +67,9 @@ impl Executor {
         self.spawn_async_named(SPAWN_ASYNC, future)
     }
 
-    /// Как [`spawn_async`](Self::spawn_async), но с именем задачи: каждый `poll` future
-    /// исполняется с меткой `async`/`name` ([`pragma_jobs::current_task`] — для panic hook и
-    /// watchdog), имя попадает и в [`AsyncError::Panicked`].
+    /// Like [`spawn_async`](Self::spawn_async), but with a task name: every `poll` of the future
+    /// runs with the label `async`/`name` ([`pragma_jobs::current_task`], for the panic hook and the
+    /// watchdog), and the name also goes into [`AsyncError::Panicked`].
     pub fn spawn_async_named<F>(&self, name: &'static str, future: F) -> AsyncHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -83,8 +83,8 @@ impl Executor {
         };
         let spawner = self.inner.spawner.clone();
         let schedule = move |runnable: Runnable| {
-            // Отказ (пул остановлен) сбрасывает `Runnable` — `async-task` отменяет задачу и
-            // будит ожидающего, поэтому ошибку здесь обрабатывать не нужно.
+            // A refusal (the pool has stopped) drops the `Runnable`: `async-task` cancels the task and
+            // wakes the waiter, so the error needs no handling here.
             let _ = spawner.spawn_detached(Priority::Background, move || {
                 pragma_jobs::labeled("async", name, || runnable.run());
             });
@@ -94,12 +94,12 @@ impl Executor {
         AsyncHandle::running(task.fallible(), self.inner.spawner.clone())
     }
 
-    /// Исполняет синхронное замыкание в blocking-пуле (файловый I/O, декомпрессия).
+    /// Runs a synchronous closure in the blocking pool (file I/O, decompression).
     ///
-    /// Вызов не блокирует: если поставлено уже `blocking_capacity` задач, хэндл сразу
-    /// содержит [`AsyncError::Overloaded`]. Работает и из future (`.await` на хэндле), и
-    /// из кадра (`poll_ready`). Сброс хэндла до старта отменяет задачу; начатая —
-    /// доработает, результат будет сброшен. Паника — [`AsyncError::Panicked`].
+    /// The call does not block: if `blocking_capacity` tasks are already queued, the handle immediately
+    /// holds [`AsyncError::Overloaded`]. It works both from a future (`.await` on the handle) and
+    /// from a frame (`poll_ready`). Dropping the handle before the start cancels the task; a started one
+    /// runs to completion and its result is discarded. A panic is [`AsyncError::Panicked`].
     pub fn unblock<F, T>(&self, f: F) -> AsyncHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -126,13 +126,13 @@ impl Executor {
         }
     }
 
-    /// Пул, на котором исполняются задачи, ещё принимает работу.
+    /// Whether the pool running the tasks still accepts work.
     #[must_use]
     pub fn is_alive(&self) -> bool {
         self.inner.spawner.is_alive()
     }
 
-    /// Сколько потоков blocking-пула запущено сейчас (не больше `blocking_threads`).
+    /// How many blocking pool threads are running right now (at most `blocking_threads`).
     #[must_use]
     pub fn blocking_threads(&self) -> usize {
         self.inner.blocking.threads()

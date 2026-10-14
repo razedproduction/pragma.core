@@ -13,10 +13,10 @@ struct JobState<T> {
     result: Mutex<Option<Result<T, JobError>>>,
 }
 
-/// Хэндл задачи, запущенной через [`ThreadPool::spawn`].
+/// A handle to a task started via [`ThreadPool::spawn`].
 ///
-/// Сброс хэндла не отменяет задачу: она доработает, результат будет выброшен.
-#[must_use = "без join() результат и паника задачи теряются"]
+/// Dropping the handle does not cancel the task: it runs to completion and the result is discarded.
+#[must_use = "without join() the task's result and panic are lost"]
 pub struct JobHandle<T> {
     state: Arc<JobState<T>>,
     shared: Arc<Shared>,
@@ -32,14 +32,14 @@ impl<T> std::fmt::Debug for JobHandle<T> {
 }
 
 impl<T> JobHandle<T> {
-    /// Задача завершилась (успешно, паникой или отменой).
+    /// Whether the task has finished (successfully, by panic or by cancellation).
     #[must_use]
     pub fn is_finished(&self) -> bool {
         self.state.done.is_zero()
     }
 
-    /// Ждёт результат. Пока ждёт, исполняет другие задачи пула (help-while-wait), поэтому
-    /// вызов из задачи того же пула не дедлочит даже на одном воркере.
+    /// Waits for the result. While waiting it runs other pool tasks (help-while-wait), so
+    /// a call from a task of the same pool does not deadlock even on a single worker.
     pub fn join(self) -> Result<T, JobError> {
         let shared = &self.shared;
         enter(shared, || {
@@ -54,7 +54,7 @@ impl<T> JobHandle<T> {
     }
 }
 
-/// Сторона исполнителя: записывает результат; сброс без результата означает отмену.
+/// The executor side: writes the result; dropping it without a result means cancellation.
 struct Completer<T> {
     state: Arc<JobState<T>>,
     name: &'static str,
@@ -67,7 +67,7 @@ impl<T> Completer<T> {
             .result
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(result);
-        // Сигнал о завершении — в `Drop`.
+        // The completion signal is sent in `Drop`.
     }
 }
 
@@ -88,7 +88,7 @@ impl<T> Drop for Completer<T> {
 }
 
 impl ThreadPool {
-    /// Запускает `'static`-задачу с приоритетом `priority` и возвращает хэндл на результат.
+    /// Starts a `'static` task with priority `priority` and returns a handle to the result.
     pub fn spawn<F, T>(&self, priority: Priority, f: F) -> JobHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -97,8 +97,8 @@ impl ThreadPool {
         self.spawn_named(SPAWN_JOB, priority, f)
     }
 
-    /// Как [`spawn`](Self::spawn), но с именем задачи: оно попадает в метку задачи
-    /// ([`current_task`](crate::current_task), watchdog) и в [`JobError::Panicked`].
+    /// Like [`spawn`](Self::spawn), but with a task name: it goes into the task label
+    /// ([`current_task`](crate::current_task), watchdog) and into [`JobError::Panicked`].
     pub fn spawn_named<F, T>(&self, name: &'static str, priority: Priority, f: F) -> JobHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,

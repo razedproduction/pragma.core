@@ -12,9 +12,9 @@ use crate::resources::{ResourceKey, Resources};
 
 type System = Box<dyn Fn(&TaskContext<'_>) -> Result<(), GraphError> + Send + Sync>;
 
-/// Объявление задачи: доступ к ресурсам и явный порядок.
+/// A task declaration: resource access and explicit order.
 ///
-/// Передаётся в замыкание-настройку [`FrameGraphBuilder::task`]:
+/// Passed to the configuration closure of [`FrameGraphBuilder::task`]:
 /// `|t| t.reads::<Input>().writes::<Bodies>().after("input")`.
 #[derive(Debug, Default)]
 #[must_use]
@@ -24,23 +24,23 @@ pub struct TaskConfig {
 }
 
 impl TaskConfig {
-    /// Задача читает ресурс `T`.
+    /// The task reads resource `T`.
     pub fn reads<T: Send + Sync + 'static>(self) -> Self {
         self.declare(ResourceKey::of::<T>(), false)
     }
 
-    /// Задача пишет ресурс `T` (запись включает чтение).
+    /// The task writes resource `T` (writing includes reading).
     pub fn writes<T: Send + Sync + 'static>(self) -> Self {
         self.declare(ResourceKey::of::<T>(), true)
     }
 
-    /// Задача исполняется раньше задачи `task`.
+    /// The task runs before task `task`.
     pub fn before(mut self, task: impl Into<String>) -> Self {
         self.deps.push(Dependency::Before(task.into()));
         self
     }
 
-    /// Задача исполняется позже задачи `task`.
+    /// The task runs after task `task`.
     pub fn after(mut self, task: impl Into<String>) -> Self {
         self.deps.push(Dependency::After(task.into()));
         self
@@ -61,7 +61,7 @@ struct TaskDecl {
     system: System,
 }
 
-/// Построитель графа кадра (см. [`FrameGraph::builder`]).
+/// The frame graph builder (see [`FrameGraph::builder`]).
 #[derive(Default)]
 #[must_use]
 pub struct FrameGraphBuilder {
@@ -82,17 +82,17 @@ impl std::fmt::Debug for FrameGraphBuilder {
 }
 
 impl FrameGraphBuilder {
-    /// Режим `ordered`: конфликтующие задачи без явного порядка исполняются в порядке
-    /// объявления, а не дают [`GraphError::AmbiguousOrder`]. Явные `before`/`after` важнее
-    /// порядка объявления; если вместе они замыкают цикл — [`GraphError::Cycle`].
+    /// The `ordered` mode: conflicting tasks without an explicit order run in declaration
+    /// order instead of producing [`GraphError::AmbiguousOrder`]. Explicit `before`/`after` take
+    /// precedence over declaration order; if together they close a cycle, that is [`GraphError::Cycle`].
     pub fn ordered(mut self) -> Self {
         self.ordered = true;
         self
     }
 
-    /// Регистрирует задачу `name`: `configure` объявляет доступ и порядок, `system` — работа.
+    /// Registers task `name`: `configure` declares access and order, `system` is the work.
     ///
-    /// `system` вызывается раз в кадр; возвращает `()` или `Result<(), E>` (см. [`TaskResult`]).
+    /// `system` is called once per frame; it returns `()` or `Result<(), E>` (see [`TaskResult`]).
     pub fn task<C, F, R>(&mut self, name: impl Into<String>, configure: C, system: F) -> &mut Self
     where
         C: FnOnce(TaskConfig) -> TaskConfig,
@@ -110,13 +110,13 @@ impl FrameGraphBuilder {
         self
     }
 
-    /// Проверяет описание и строит граф: дубли имён ([`GraphError::DuplicateTask`]),
-    /// неизвестные зависимости ([`GraphError::UnknownDependency`]), циклы
-    /// ([`GraphError::Cycle`]) и конфликты доступа без порядка ([`GraphError::AmbiguousOrder`]).
-    /// Граф больше [`MAX_TASKS`](crate::MAX_TASKS) задач или [`MAX_EDGES`](crate::MAX_EDGES)
-    /// рёбер, как и нехватка памяти при планировании, — [`GraphError::TooLarge`].
+    /// Validates the description and builds the graph: duplicate names ([`GraphError::DuplicateTask`]),
+    /// unknown dependencies ([`GraphError::UnknownDependency`]), cycles
+    /// ([`GraphError::Cycle`]) and unordered access conflicts ([`GraphError::AmbiguousOrder`]).
+    /// A graph with more than [`MAX_TASKS`](crate::MAX_TASKS) tasks or [`MAX_EDGES`](crate::MAX_EDGES)
+    /// edges, as well as running out of memory while planning, is [`GraphError::TooLarge`].
     pub fn build(self) -> Result<FrameGraph, GraphError> {
-        // До любых выделений по числу задач (reliability §1).
+        // Before any allocation sized by the number of tasks (reliability §1).
         if self.tasks.len() > plan::MAX_TASKS {
             return Err(GraphError::TooLarge {
                 tasks: self.tasks.len(),
@@ -184,24 +184,24 @@ pub(crate) struct Node {
     pub(crate) name: String,
     pub(crate) access: Vec<Access>,
     system: System,
-    /// Прямые последователи (после транзитивной редукции), по возрастанию индекса.
+    /// Direct successors (after transitive reduction), in ascending index order.
     pub(crate) successors: Vec<usize>,
-    /// Черновик на кадр: последователи, ставшие готовыми после этой задачи. Пишет только
-    /// поток, исполнивший задачу (каждая задача исполняется раз за кадр).
+    /// Per-frame scratch: successors that became ready after this task. Written only by
+    /// the thread that ran the task (each task runs once per frame).
     ready: Box<[AtomicUsize]>,
     indegree: usize,
 }
 
-/// Граф задач кадра: строится один раз ([`FrameGraph::builder`]), исполняется каждый кадр
-/// ([`FrameGraph::run`]) без аллокаций.
+/// The frame graph: built once ([`FrameGraph::builder`]), run every frame
+/// ([`FrameGraph::run`]) without allocations.
 pub struct FrameGraph {
     pub(crate) nodes: Vec<Node>,
     order: Vec<usize>,
-    /// Задачи без предшественников (индексы; атомики — чтобы делить код с `Node::ready`).
+    /// Tasks without predecessors (indices; atomics so the code can be shared with `Node::ready`).
     roots: Box<[AtomicUsize]>,
-    /// Сколько предшественников задачи ещё не завершилось в текущем кадре.
+    /// How many of a task's predecessors have not finished yet in the current frame.
     remaining: Box<[ArrivalCounter]>,
-    /// Все ресурсы графа и первая задача, объявившая каждый.
+    /// All resources of the graph and the first task that declared each one.
     required: Vec<(ResourceKey, usize)>,
 }
 
@@ -215,33 +215,33 @@ impl std::fmt::Debug for FrameGraph {
 }
 
 impl FrameGraph {
-    /// Новый построитель.
+    /// A new builder.
     pub fn builder() -> FrameGraphBuilder {
         FrameGraphBuilder::default()
     }
 
-    /// Число задач.
+    /// Number of tasks.
     #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// В графе нет задач.
+    /// Whether the graph has no tasks.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
-    /// Имена задач в стабильном топологическом порядке: из готовых задач первой идёт
-    /// зарегистрированная раньше. На одном воркере задачи исполняются не обязательно в этом
-    /// порядке, но любой реальный порядок совместим с теми же рёбрами.
+    /// Task names in a stable topological order: among ready tasks, the one registered earlier
+    /// comes first. On a single worker the tasks do not necessarily run in this
+    /// order, but any actual order is consistent with the same edges.
     pub fn order(&self) -> impl Iterator<Item = &str> {
         self.order
             .iter()
             .filter_map(|&i| self.nodes.get(i).map(|n| n.name.as_str()))
     }
 
-    /// Рёбра «раньше → позже» после транзитивной редукции, в топологическом порядке начала.
+    /// "Earlier → later" edges after transitive reduction, in topological order of their sources.
     pub fn edges(&self) -> impl Iterator<Item = (&str, &str)> {
         self.order
             .iter()
@@ -255,13 +255,13 @@ impl FrameGraph {
             })
     }
 
-    /// Исполняет кадр: каждая задача — ровно один раз, после всех своих предшественников;
-    /// независимые задачи — параллельно на `pool`.
+    /// Runs a frame: every task exactly once, after all of its predecessors;
+    /// independent tasks in parallel on `pool`.
     ///
-    /// Перед стартом проверяет, что в `resources` есть все объявленные ресурсы
-    /// ([`GraphError::MissingResource`]). Ошибка или паника задачи не останавливает независимые
-    /// ветви, но зависимые от неё задачи в этом кадре не запускаются; возвращается ошибка задачи
-    /// с наименьшим индексом регистрации. В установившемся режиме не аллоцирует.
+    /// Before starting, it checks that `resources` contains all declared resources
+    /// ([`GraphError::MissingResource`]). An error or panic of a task does not stop independent
+    /// branches, but the tasks depending on it do not run in this frame; the error of the task
+    /// with the lowest registration index is returned. In the steady state it does not allocate.
     pub fn run(&mut self, pool: &ThreadPool, resources: &mut Resources) -> Result<(), GraphError> {
         let _span = tracing::debug_span!("frame_graph", tasks = self.nodes.len()).entered();
         #[cfg(feature = "puffin")]
@@ -290,7 +290,7 @@ impl FrameGraph {
             first_error: &first_error,
         };
         let roots = &self.roots;
-        // Одна область на кадр: внешний поток входит в пул один раз, а не на каждый `join`.
+        // One scope per frame: the external thread enters the pool once rather than on every `join`.
         if let Err(e) = pool.scope(|_| run.fork(roots)) {
             run.record(usize::MAX, e.into());
         }
@@ -304,13 +304,13 @@ impl FrameGraph {
     }
 }
 
-/// Состояние одного кадра.
+/// The state of one frame.
 struct Run<'a> {
     nodes: &'a [Node],
     remaining: &'a [ArrivalCounter],
     pool: &'a ThreadPool,
     resources: &'a Resources,
-    /// Ошибка задачи с наименьшим индексом (`usize::MAX` — ошибка вне задач).
+    /// The error of the task with the lowest index (`usize::MAX`: an error outside tasks).
     first_error: &'a Mutex<Option<(usize, GraphError)>>,
 }
 
@@ -325,8 +325,8 @@ impl Run<'_> {
         }
     }
 
-    /// Запускает готовые задачи: половину — здесь, вторую отдаёт ворам через `join`
-    /// (`join` не аллоцирует, в отличие от `spawn`).
+    /// Launches ready tasks: half of them here, the other half handed to thieves via `join`
+    /// (`join` does not allocate, unlike `spawn`).
     fn fork(&self, ready: &[AtomicUsize]) {
         match ready {
             [] => {}
@@ -340,8 +340,8 @@ impl Run<'_> {
         }
     }
 
-    /// Исполняет задачу и освобождает последователей. Цепочку из одного готового
-    /// последователя продолжает циклом, без роста стека.
+    /// Runs a task and releases its successors. A chain of single ready successors
+    /// is continued in a loop, without growing the stack.
     fn run_from(&self, mut current: usize) {
         loop {
             let Some(node) = self.nodes.get(current) else {
@@ -355,8 +355,8 @@ impl Run<'_> {
                 let Some(counter) = self.remaining.get(succ) else {
                     continue;
                 };
-                // Последний прибывший предшественник видит записи всех остальных и публикует их
-                // вместе со своими той задаче, которую запускает.
+                // The last predecessor to arrive sees the writes of all the others and publishes them,
+                // together with its own, to the task it launches.
                 if counter.arrive()
                     && let Some(slot) = node.ready.get(ready)
                 {
@@ -379,7 +379,7 @@ impl Run<'_> {
             pool: self.pool,
             resources: self.resources,
         };
-        // Поля span вычисляются, только если уровень DEBUG включён.
+        // The span fields are evaluated only if the DEBUG level is enabled.
         let _span = tracing::debug_span!(
             "graph_task",
             task = node.name.as_str(),

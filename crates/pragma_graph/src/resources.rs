@@ -4,7 +4,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
-/// Ключ ресурса: тип и его имя для сообщений об ошибках.
+/// A resource key: the type and its name for error messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResourceKey {
     pub(crate) id: TypeId,
@@ -20,7 +20,7 @@ impl ResourceKey {
     }
 }
 
-/// Слот ресурса: `RwLock<T>` со стёртым типом.
+/// A resource slot: a type-erased `RwLock<T>`.
 struct Slot {
     name: &'static str,
     cell: Box<dyn Any + Send + Sync>,
@@ -32,19 +32,19 @@ impl Slot {
     }
 }
 
-/// Почему не удалось взять ресурс.
+/// Why a resource could not be borrowed.
 pub(crate) enum Borrow {
     Missing,
     Busy,
 }
 
-/// Хранилище ресурсов кадра: по одному значению каждого типа.
+/// The frame's resource storage: one value per type.
 ///
-/// Каждый ресурс лежит в своём типизированном слоте с блокировкой чтения/записи. Граф
-/// гарантирует при сборке, что одновременно исполняемые задачи не конфликтуют по доступу,
-/// поэтому в кадре блокировки не ждут: занятый слот означает ошибку ([`GraphError::BorrowConflict`]),
-/// а не ожидание. Граф не владеет ресурсами: один и тот же граф можно исполнять над разными
-/// экземплярами `Resources` (например, над «extract»-копией состояния для рендера).
+/// Each resource lives in its own typed slot with a read/write lock. The graph
+/// guarantees at build time that concurrently running tasks do not conflict in their access,
+/// so locks are never waited on during a frame: a busy slot means an error ([`GraphError::BorrowConflict`]),
+/// not a wait. The graph does not own the resources: the same graph can run over different
+/// `Resources` instances (for example over an "extract" copy of the state for rendering).
 ///
 /// [`GraphError::BorrowConflict`]: crate::GraphError::BorrowConflict
 #[derive(Default)]
@@ -54,7 +54,7 @@ pub struct Resources {
 
 impl fmt::Debug for Resources {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Сортировка: порядок итерации `HashMap` случаен, а вывод должен быть воспроизводимым.
+        // Sorted: `HashMap` iteration order is random, and the output must be reproducible.
         let mut names: Vec<&str> = self.slots.values().map(|s| s.name).collect();
         names.sort_unstable();
         f.debug_struct("Resources").field("types", &names).finish()
@@ -62,13 +62,13 @@ impl fmt::Debug for Resources {
 }
 
 impl Resources {
-    /// Пустое хранилище.
+    /// An empty storage.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Кладёт ресурс; возвращает прежнее значение этого типа, если оно было.
+    /// Stores a resource; returns the previous value of this type, if there was one.
     pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) -> Option<T> {
         let slot = Slot {
             name: type_name::<T>(),
@@ -78,7 +78,7 @@ impl Resources {
         Self::into_value(old)
     }
 
-    /// Убирает ресурс и возвращает его.
+    /// Removes a resource and returns it.
     pub fn remove<T: Send + Sync + 'static>(&mut self) -> Option<T> {
         let old = self.slots.remove(&TypeId::of::<T>())?;
         Self::into_value(old)
@@ -89,7 +89,7 @@ impl Resources {
         Some(cell.into_inner().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Есть ли ресурс типа `T`.
+    /// Whether there is a resource of type `T`.
     #[must_use]
     pub fn contains<T: 'static>(&self) -> bool {
         self.slots.contains_key(&TypeId::of::<T>())
@@ -99,26 +99,26 @@ impl Resources {
         self.slots.contains_key(&key.id)
     }
 
-    /// Число ресурсов.
+    /// Number of resources.
     #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// Хранилище пусто.
+    /// Whether the storage is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
 
-    /// Ресурс на чтение. Вне кадра (граф исполняется только по `&mut Resources`) слот
-    /// не бывает занят на запись, поэтому `None` значит только «ресурса нет».
+    /// A resource for reading. Outside a frame (the graph runs only over `&mut Resources`) a slot
+    /// is never write-locked, so `None` only means "no such resource".
     #[must_use]
     pub fn get<T: 'static>(&self) -> Option<Res<'_, T>> {
         self.read::<T>().ok()
     }
 
-    /// Ресурс на запись — без блокировки, через эксклюзивную ссылку.
+    /// A resource for writing: no locking, via an exclusive reference.
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         let slot = self.slots.get_mut(&TypeId::of::<T>())?;
         let cell = slot.cell.downcast_mut::<RwLock<T>>()?;
@@ -132,8 +132,8 @@ impl Resources {
             .ok_or(Borrow::Missing)
     }
 
-    // Отравление (паника задачи посреди записи) не повод паниковать: ошибка этой задачи уже
-    // возвращена из кадра, а решать, согласованы ли данные, — пользователю.
+    // Poisoning (a task panicking mid-write) is no reason to panic: that task's error has already
+    // been returned from the frame, and whether the data is consistent is for the user to decide.
     pub(crate) fn read<T: 'static>(&self) -> Result<Res<'_, T>, Borrow> {
         match self.slot::<T>()?.try_read() {
             Ok(guard) => Ok(Res(guard)),
@@ -151,7 +151,7 @@ impl Resources {
     }
 }
 
-/// Ресурс, взятый на чтение.
+/// A resource borrowed for reading.
 pub struct Res<'a, T>(RwLockReadGuard<'a, T>);
 
 impl<T> Deref for Res<'_, T> {
@@ -168,7 +168,7 @@ impl<T: fmt::Debug> fmt::Debug for Res<'_, T> {
     }
 }
 
-/// Ресурс, взятый на запись.
+/// A resource borrowed for writing.
 pub struct ResMut<'a, T>(RwLockWriteGuard<'a, T>);
 
 impl<T> Deref for ResMut<'_, T> {

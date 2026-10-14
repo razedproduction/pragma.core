@@ -1,14 +1,14 @@
-//! L3: async-задачи `pragma.core` (`docs/architecture.md` §3.4).
+//! L3: async tasks of `pragma.core` (`docs/architecture.md` §3.4).
 //!
-//! [`Executor`] исполняет future на воркерах [`ThreadPool`](pragma_jobs::ThreadPool) с
-//! приоритетом `Background` (через `async-task`, без второго пула потоков и без tokio —
-//! DECISIONS #8), а синхронный I/O отдаёт в небольшой ограниченный blocking-пул
-//! ([`Executor::unblock`]), чтобы тот не занимал воркеры кадра (DECISIONS #23).
+//! [`Executor`] runs futures on the workers of a [`ThreadPool`](pragma_jobs::ThreadPool) with
+//! `Background` priority (via `async-task`, with no second thread pool and no tokio,
+//! DECISIONS #8), and hands synchronous I/O to a small bounded blocking pool
+//! ([`Executor::unblock`]) so that it does not occupy frame workers (DECISIONS #23).
 //!
-//! - Сброс [`AsyncHandle`] отменяет задачу; паника в future — [`AsyncError::Panicked`].
-//! - Мост «async → кадр» — [`AsyncHandle::poll_ready`]: неблокирующая проверка в начале
-//!   кадра. Блокирующее [`AsyncHandle::wait`] из работы пула (воркер, кадр графа) запрещено
-//!   и возвращает [`AsyncError::WouldBlock`].
+//! - Dropping an [`AsyncHandle`] cancels the task; a panic in a future is [`AsyncError::Panicked`].
+//! - The "async → frame" bridge is [`AsyncHandle::poll_ready`]: a non-blocking check at the start
+//!   of a frame. A blocking [`AsyncHandle::wait`] from pool work (a worker, a graph frame) is forbidden
+//!   and returns [`AsyncError::WouldBlock`].
 //!
 //! ```
 //! use pragma_async::{AsyncConfig, AsyncError, Executor};
@@ -17,23 +17,23 @@
 //! let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
 //! let exec = Executor::new(&pool, AsyncConfig::default())?;
 //!
-//! // Фоновая «загрузка»: синхронное чтение — в blocking-пуле, обработка — на воркере.
+//! // Background "loading": the synchronous read goes to the blocking pool, processing to a worker.
 //! let io = exec.clone();
 //! let mut level = exec.spawn_async(async move {
-//!     let bytes = io.unblock(|| vec![1_u8, 2, 3]).await?; // здесь был бы std::fs::read
+//!     let bytes = io.unblock(|| vec![1_u8, 2, 3]).await?; // std::fs::read would go here
 //!     Ok::<usize, AsyncError>(bytes.len())
 //! });
 //!
-//! // Игровой цикл: в начале кадра проверяем, готово ли.
+//! // Game loop: at the start of a frame, check whether it is ready.
 //! let loaded = loop {
 //!     if let Some(result) = level.poll_ready() {
 //!         break result??;
 //!     }
-//!     std::thread::yield_now(); // ...кадр...
+//!     std::thread::yield_now(); // ...frame...
 //! };
 //! assert_eq!(loaded, 3);
 //!
-//! // Паника не роняет воркер, сброс хэндла отменяет задачу.
+//! // A panic does not bring a worker down; dropping the handle cancels the task.
 //! let failed = exec.spawn_async(async { panic!("corrupt asset") }).wait();
 //! assert!(matches!(failed, Err(AsyncError::Panicked { .. })));
 //! drop(exec.spawn_async(futures_lite::future::pending::<()>()));

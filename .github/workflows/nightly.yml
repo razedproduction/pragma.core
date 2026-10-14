@@ -7,8 +7,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Soak: стресс-тесты в 5 раз длиннее, seed случайных паник/отмен меняется каждую ночь
-  # (печатается в логе для воспроизведения).
+  # Soak: stress tests 5 times longer; the seed of random panics/cancellations changes every night
+  # (printed in the log for reproduction).
   PRAGMA_SOAK_ROUNDS: "5"
   PRAGMA_SOAK_SEED: ${{ github.run_number }}
 
@@ -25,11 +25,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show # installs the toolchain pinned in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
-      # Долгие тесты #[ignore]: 10^7 задач, случайные паники, 1..2N воркеров.
+      # Long #[ignore] tests: 10^7 tasks, random panics, 1..2N workers.
       - run: cargo test -p pragma_jobs --release --test stress -- --ignored
-      # Async: 200k задач со случайной отменой, паниками и blocking-вызовами, 1..2N воркеров.
+      # Async: 200k tasks with random cancellation, panics and blocking calls, 1..2N workers.
       - run: cargo test -p pragma_async --release --test prop -- --ignored
-      # frame_sim на много тиков: весь набор детерминизма, 3000 тиков на прогон.
+      # frame_sim over many ticks: the whole determinism suite, 3000 ticks per run.
       - run: cargo run -p frame_sim --release -- --suite --ticks 3000
 
   fuzz:
@@ -45,8 +45,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      # Корпус переживает ночи: восстанавливаем последний и сохраняем пополненный под новым
-      # ключом (кэш неизменяем).
+      # The corpus survives across nights: restore the latest one and save the extended one under a new
+      # key (caches are immutable).
       - uses: actions/cache@v4
         with:
           path: fuzz/corpus/graph_build

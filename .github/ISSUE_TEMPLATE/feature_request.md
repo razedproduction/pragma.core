@@ -1,13 +1,13 @@
 ---
 name: Feature request
-about: Новая возможность ядра
+about: A new capability of the core
 labels: enhancement
 ---
 
-**Задача движка, которую это решает**
+**The engine problem this solves**
 
-**Предлагаемый API** (набросок)
+**Proposed API** (a sketch)
 
-**Скоуп.** Входит ли это в границы ядра (DECISIONS #1, раздел «Вне скоупа» в docs/roadmap.md)?
+**Scope.** Is this within the core's boundaries (DECISIONS #1, the "Out of scope" section in docs/roadmap.md)?
 
-**Слой / крейт**: `pragma_?`
+**Layer / crate**: `pragma_?`

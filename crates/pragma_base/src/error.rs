@@ -1,27 +1,27 @@
-/// Ошибки L0-примитивов.
+/// Errors of the L0 primitives.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BaseError {
-    /// Хэндл указывает на удалённый слот (поколение не совпадает) или на несуществующий индекс.
+    /// The handle points to a removed slot (generation mismatch) or to a nonexistent index.
     #[error("stale or invalid handle (index {index}, generation {generation})")]
     #[non_exhaustive]
     StaleHandle {
-        /// Индекс слота.
+        /// Slot index.
         index: u32,
-        /// Поколение, записанное в хэндле.
+        /// Generation recorded in the handle.
         generation: u32,
     },
-    /// Пул исчерпал адресное пространство индексов (`u32::MAX` слотов).
+    /// The pool has exhausted its index space (`u32::MAX` slots).
     #[error("handle pool capacity exhausted")]
     CapacityExhausted,
-    /// Аллокатор не дал памяти под новый слот пула (вместо `abort`).
+    /// The allocator could not provide memory for a new pool slot (instead of `abort`).
     #[error("out of memory growing handle pool beyond {slots} slots")]
     #[non_exhaustive]
     OutOfMemory {
-        /// Число слотов пула на момент отказа.
+        /// Number of pool slots at the moment of failure.
         slots: usize,
     },
-    /// Счётчик тиков переполнился.
+    /// The tick counter overflowed.
     #[error("tick counter overflow")]
     TickOverflow,
 }

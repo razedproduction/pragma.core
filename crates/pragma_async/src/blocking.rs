@@ -8,11 +8,11 @@ use async_task::Runnable;
 
 use crate::{AsyncConfig, AsyncError};
 
-/// Пул потоков для синхронного (блокирующего) I/O — DECISIONS #23.
+/// A thread pool for synchronous (blocking) I/O, DECISIONS #23.
 ///
-/// Потоки создаются по требованию до `blocking_threads` и живут до сброса владельца.
-/// Задачи — `Runnable` из `async-task`: отмена хэндла до старта превращает задачу в сброс
-/// замыкания, а результат и пробуждение ожидающего даёт сам `async-task`.
+/// Threads are created on demand up to `blocking_threads` and live until the owner is dropped.
+/// Tasks are `async-task` `Runnable`s: cancelling the handle before the start turns the task into
+/// dropping the closure, and `async-task` itself delivers the result and wakes the waiter.
 pub(crate) struct BlockingPool {
     shared: Arc<BlockingShared>,
 }
@@ -20,7 +20,7 @@ pub(crate) struct BlockingPool {
 struct BlockingShared {
     state: Mutex<BlockingState>,
     work: Condvar,
-    /// Поставленные и ещё не завершённые задачи (в очереди и в работе).
+    /// Queued tasks that have not finished yet (waiting and running).
     pending: AtomicUsize,
     config: AsyncConfig,
 }
@@ -40,7 +40,7 @@ impl BlockingShared {
 
     fn schedule(weak: &Weak<Self>, runnable: Runnable) {
         let Some(shared) = weak.upgrade() else {
-            // Пул сброшен: `Runnable` сбрасывается — задача отменяется.
+            // The pool is gone: the `Runnable` is dropped, which cancels the task.
             return;
         };
         let mut state = shared.lock();
@@ -54,8 +54,8 @@ impl BlockingShared {
         shared.work.notify_one();
     }
 
-    /// Гарантирует, что поставленную сейчас задачу кто-то возьмёт: свободный поток или
-    /// новый, если лимит не исчерпан.
+    /// Guarantees that the task being queued now will be taken by someone: an idle thread or
+    /// a new one, if the limit is not exhausted.
     fn ensure_thread(self: &Arc<Self>) -> Result<(), AsyncError> {
         let mut state = self.lock();
         if state.shutdown {
@@ -80,7 +80,7 @@ impl BlockingShared {
                 message: error.to_string(),
             }),
             Err(error) => {
-                // Задачу возьмёт один из уже запущенных потоков, когда освободится.
+                // One of the threads already running will take the task when it frees up.
                 tracing::warn!(thread = %name, %error, "failed to spawn extra blocking thread");
                 Ok(())
             }
@@ -93,8 +93,8 @@ fn worker_main(shared: &BlockingShared) {
     loop {
         if let Some(runnable) = state.queue.pop_front() {
             drop(state);
-            // Паника замыкания перехвачена внутри future; сюда может долететь только паника
-            // деструктора — поток всё равно продолжает работу.
+            // A panic of the closure is caught inside the future; only a destructor panic can
+            // reach here, and the thread keeps running anyway.
             if panic::catch_unwind(AssertUnwindSafe(|| runnable.run())).is_err() {
                 tracing::error!("panic escaped a blocking task; thread keeps running");
             }
@@ -113,7 +113,7 @@ fn worker_main(shared: &BlockingShared) {
     }
 }
 
-/// Слот в лимите `blocking_capacity`; освобождается, когда задача завершена или сброшена.
+/// A slot within the `blocking_capacity` limit; released when the task finishes or is dropped.
 pub(crate) struct PendingSlot {
     shared: Weak<BlockingShared>,
 }
@@ -138,7 +138,7 @@ impl BlockingPool {
         }
     }
 
-    /// Занимает слот в лимите поставленных задач или сразу возвращает `Overloaded`.
+    /// Takes a slot within the queued task limit or immediately returns `Overloaded`.
     pub(crate) fn reserve(&self) -> Result<PendingSlot, AsyncError> {
         let capacity = self.shared.config.blocking_capacity();
         let pending = &self.shared.pending;
@@ -163,8 +163,8 @@ impl BlockingPool {
         }
     }
 
-    /// Ставит задачу: `spawn` получает функцию планирования и возвращает `Runnable`
-    /// с хэндлом (`async_task::spawn`).
+    /// Queues a task: `spawn` receives the schedule function and returns a `Runnable`
+    /// with its handle (`async_task::spawn`).
     pub(crate) fn submit<H>(
         &self,
         spawn: impl FnOnce(Box<dyn Fn(Runnable) + Send + Sync>) -> (Runnable, H),
@@ -176,7 +176,7 @@ impl BlockingPool {
         Ok(handle)
     }
 
-    /// Число запущенных потоков (для тестов лимита).
+    /// Number of running threads (for limit tests).
     pub(crate) fn threads(&self) -> usize {
         self.shared.lock().threads.len()
     }
@@ -193,18 +193,18 @@ impl Drop for BlockingPool {
             )
         };
         self.shared.work.notify_all();
-        // Невзятые задачи отменяются (их хэндлы получают `Cancelled`). Сброс — вне блокировки:
-        // деструкторы будят ожидающих, а те могут снова планировать задачи.
+        // Tasks not yet taken are cancelled (their handles get `Cancelled`). Dropping happens outside
+        // the lock: destructors wake waiters, and those may schedule tasks again.
         for runnable in queued {
             if panic::catch_unwind(AssertUnwindSafe(|| drop(runnable))).is_err() {
                 tracing::error!("panic while dropping a cancelled blocking task");
             }
         }
-        // Задача, которая уже исполняется, доработает: синхронный I/O не прервать.
+        // A task that is already running will finish: synchronous I/O cannot be interrupted.
         let me = thread::current().id();
         for handle in threads {
             if handle.thread().id() == me {
-                // Исполнитель сброшен из собственной blocking-задачи: поток выйдет сам.
+                // The executor is dropped from its own blocking task: the thread will exit by itself.
                 continue;
             }
             if handle.join().is_err() {

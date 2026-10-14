@@ -9,43 +9,42 @@ use crate::primitives::{AtomicBool, Ordering};
 
 type ErasedFn = Box<dyn FnOnce() + Send + 'static>;
 
-/// Область, внутри которой задачи могут заимствовать данные со стека (без `'static`).
+/// A scope inside which tasks may borrow data from the stack (no `'static` needed).
 ///
-/// Создаётся только функцией [`scope`]; та не вернётся (ни нормально, ни паникой), пока
-/// не завершится или не будет сброшена каждая задача, созданная через [`task`](Self::task)
-/// или [`task_in`](Self::task_in). Именно это делает безопасным стирание лайфтайма в
-/// [`ScopedTask`].
+/// Created only by the [`scope`] function, which does not return (neither normally nor by panic)
+/// until every task created via [`task`](Self::task) or [`task_in`](Self::task_in) has finished
+/// or been dropped. This is exactly what makes erasing the lifetime in [`ScopedTask`] sound.
 ///
-/// `D` — данные планировщика, доступные задачам по ссылке на всё время области
-/// (например, ссылка на слот для первой ошибки). `TaskScope` ковариантен по `D`, поэтому
-/// `D` может заимствовать локальные данные вызывающего: `&'scope TaskScope<'scope, 'env, X<'a>>`
-/// сужается до `&'scope TaskScope<'scope, 'env, X<'scope>>`.
+/// `D` is scheduler data available to the tasks by reference for the whole scope
+/// (for example a reference to the slot for the first error). `TaskScope` is covariant in `D`, so
+/// `D` may borrow the caller's local data: `&'scope TaskScope<'scope, 'env, X<'a>>`
+/// narrows to `&'scope TaskScope<'scope, 'env, X<'scope>>`.
 pub struct TaskScope<'scope, 'env: 'scope, D> {
     pending: Arc<AtomicCounter>,
     data: D,
-    // Инвариантность по обоим лайфтаймам — как у `std::thread::Scope`. `'env` нужен ради
-    // неявной границы `'env: 'scope` в `for<'scope>`-замыкании `body`: без неё компилятор
-    // требовал бы `'static` от всего, что захватывают задачи.
+    // Invariant in both lifetimes, like `std::thread::Scope`. `'env` is needed for the
+    // implied bound `'env: 'scope` in the `for<'scope>` closure `body`: without it the compiler
+    // would demand `'static` from everything the tasks capture.
     scope: PhantomData<&'scope mut &'scope ()>,
     env: PhantomData<&'env mut &'env ()>,
 }
 
-/// Слот для задачи на стеке вызывающего: задача из слота не аллоцирует (см.
-/// [`TaskScope::task_in`]). Для горячих путей вроде `join`, где `Box` на каждую задачу
-/// стоит дороже самой работы.
+/// A slot for a task on the caller's stack: a task from a slot does not allocate (see
+/// [`TaskScope::task_in`]). For hot paths like `join`, where a `Box` per task
+/// costs more than the work itself.
 pub struct StackSlot<F> {
-    /// Слот уже отдан задаче: доступ к `f` получает ровно одна [`ScopedTask`].
+    /// The slot has been handed to a task: exactly one [`ScopedTask`] gets access to `f`.
     claimed: AtomicBool,
     f: UnsafeCell<Option<F>>,
 }
 
-// SAFETY: `f` читается и пишется только через `ScopedTask`, которой слот отдан (`claimed`
-// гарантирует, что такая задача одна); владелец слота доступа к `f` не имеет. Замыкание
-// уходит в другой поток, поэтому требуется `F: Send`.
+// SAFETY: `f` is read and written only through the `ScopedTask` the slot was handed to (`claimed`
+// guarantees there is only one such task); the slot's owner has no access to `f`. The closure
+// moves to another thread, hence `F: Send` is required.
 unsafe impl<F: Send> Sync for StackSlot<F> {}
 
 impl<F> StackSlot<F> {
-    /// Слот с замыканием `f`.
+    /// A slot holding the closure `f`.
     #[must_use]
     pub fn new(f: F) -> Self {
         Self {
@@ -63,25 +62,25 @@ impl<F> fmt::Debug for StackSlot<F> {
     }
 }
 
-/// Задача области со стёртым лайфтаймом: её можно положить в любую `'static`-очередь.
+/// A scope task with its lifetime erased: it can go into any `'static` queue.
 ///
-/// Выполняется через [`run`](Self::run); сброс без выполнения тоже засчитывается как
-/// завершение, поэтому область не зависнет из-за отменённых задач. Утечка через
-/// `mem::forget` безопасна, но подвесит ожидание области навсегда.
+/// Run via [`run`](Self::run); dropping it without running also counts as
+/// completion, so the scope will not hang on cancelled tasks. Leaking it via
+/// `mem::forget` is safe but hangs the scope's wait forever.
 pub struct ScopedTask {
     body: TaskBody,
-    // Объявлено после `body`: при сбросе задачи захваченные значения уничтожаются раньше,
-    // чем область узнаёт о завершении, — даже если деструктор захваченного значения паникует.
-    // Поле не читается: вся работа — в `Drop`.
+    // Declared after `body`: when the task is dropped, the captured values are destroyed before
+    // the scope learns about the completion, even if a captured value's destructor panics.
+    // The field is never read: all the work is in `Drop`.
     _done: DoneGuard,
 }
 
 enum TaskBody {
     Boxed(Option<ErasedFn>),
-    /// Замыкание лежит в [`StackSlot`] на стеке владельца области.
+    /// The closure lives in a [`StackSlot`] on the stack of the scope's owner.
     Slot {
         slot: *const (),
-        /// Мономорфизированный `call_slot::<F>`.
+        /// The monomorphized `call_slot::<F>`.
         call: unsafe fn(*const (), bool),
         pending: bool,
     },
@@ -97,23 +96,23 @@ impl Drop for TaskBody {
             && *pending
         {
             *pending = false;
-            // SAFETY: `slot` создан в `task_in` из `&'scope StackSlot<F>` с `call_slot::<F>`;
-            // слот жив, пока задача не завершена (область ждёт её), и задача — единственный
-            // владелец доступа к нему. `pending` гарантирует однократный вызов.
+            // SAFETY: `slot` was created in `task_in` from a `&'scope StackSlot<F>` with `call_slot::<F>`;
+            // the slot is alive until the task has finished (the scope waits for it), and the task is the
+            // sole holder of access to it. `pending` guarantees a single call.
             unsafe { call(*slot, false) };
         }
     }
 }
 
-/// Забирает замыкание из слота и выполняет (`run`) или уничтожает его.
+/// Takes the closure out of the slot and runs (`run`) or destroys it.
 ///
 /// # Safety
-/// `ptr` — указатель на живой `StackSlot<F>`, доступ к которому принадлежит вызывающей задаче.
+/// `ptr` points to a live `StackSlot<F>` whose access belongs to the calling task.
 unsafe fn call_slot<F: FnOnce()>(ptr: *const (), run: bool) {
-    // SAFETY: по контракту функции `ptr` указывает на живой `StackSlot<F>`.
+    // SAFETY: by the function's contract `ptr` points to a live `StackSlot<F>`.
     let slot = unsafe { &*ptr.cast::<StackSlot<F>>() };
-    // SAFETY: к `f` обращается только задача, которой отдан слот (`claimed`), и только здесь;
-    // других ссылок на содержимое ячейки нет.
+    // SAFETY: `f` is accessed only by the task the slot was handed to (`claimed`), and only here;
+    // there are no other references to the cell's contents.
     let f = unsafe { (*slot.f.get()).take() };
     if run {
         if let Some(f) = f {
@@ -124,9 +123,9 @@ unsafe fn call_slot<F: FnOnce()>(ptr: *const (), run: bool) {
     }
 }
 
-// SAFETY: `Boxed` содержит `Send`-замыкание. `Slot` указывает на `StackSlot<F>` с `F: Send`
-// (требование `task_in`), который `Sync` и живёт, пока задача не завершена; перенос задачи
-// в другой поток передаёт туда только эксклюзивный доступ к этому слоту.
+// SAFETY: `Boxed` holds a `Send` closure. `Slot` points to a `StackSlot<F>` with `F: Send`
+// (required by `task_in`), which is `Sync` and lives until the task has finished; moving the task
+// to another thread hands over only exclusive access to that slot.
 unsafe impl Send for ScopedTask {}
 
 struct DoneGuard(Arc<AtomicCounter>);
@@ -138,8 +137,8 @@ impl Drop for DoneGuard {
 }
 
 impl ScopedTask {
-    /// Выполняет задачу. Паника замыкания пробрасывается вызывающему, но область всё равно
-    /// получает сигнал о завершении.
+    /// Runs the task. A panic of the closure propagates to the caller, but the scope still
+    /// receives the completion signal.
     pub fn run(mut self) {
         match &mut self.body {
             TaskBody::Boxed(f) => {
@@ -153,9 +152,9 @@ impl ScopedTask {
                 pending,
             } => {
                 if *pending {
-                    // Сбрасываем до вызова: при панике `Drop` не тронет слот повторно.
+                    // Cleared before the call: on panic, `Drop` will not touch the slot again.
                     *pending = false;
-                    // SAFETY: см. `TaskBody::drop` — те же инварианты, вызов однократный.
+                    // SAFETY: see `TaskBody::drop`: the same invariants, a single call.
                     unsafe { call(*slot, true) };
                 }
             }
@@ -185,13 +184,13 @@ impl<D: fmt::Debug> fmt::Debug for TaskScope<'_, '_, D> {
 }
 
 impl<'scope, D> TaskScope<'scope, '_, D> {
-    /// Данные планировщика, переданные в [`scope`].
+    /// The scheduler data passed to [`scope`].
     #[must_use]
     pub fn data(&self) -> &D {
         &self.data
     }
 
-    /// Сколько задач области ещё не завершено.
+    /// How many of the scope's tasks have not finished yet.
     #[must_use]
     pub fn pending(&self) -> usize {
         self.pending.get()
@@ -199,29 +198,29 @@ impl<'scope, D> TaskScope<'scope, '_, D> {
 
     fn register(&self) -> DoneGuard {
         if self.pending.increment().is_err() {
-            // Недостижимо: каждая живая задача держит клон `Arc` счётчика, а `Arc`
-            // аварийно завершает процесс при переполнении своего счётчика ссылок
-            // (isize::MAX) раньше, чем этот счётчик дойдёт до usize::MAX. Без инкремента
-            // стирать лайфтайм нельзя, поэтому и здесь — abort, а не тихое продолжение.
+            // Unreachable: every live task holds a clone of the counter's `Arc`, and `Arc`
+            // aborts the process when its reference count overflows (isize::MAX) before this
+            // counter can reach usize::MAX. Without the increment the lifetime must not be
+            // erased, so this is an abort here too rather than silently carrying on.
             std::process::abort();
         }
         DoneGuard(Arc::clone(&self.pending))
     }
 
-    /// Упаковывает замыкание в задачу области; область будет ждать её завершения или сброса.
+    /// Wraps a closure into a scope task; the scope will wait for it to finish or be dropped.
     pub fn task<F>(&self, f: F) -> ScopedTask
     where
         F: FnOnce() + Send + 'scope,
     {
         let done = self.register();
         let boxed: Box<dyn FnOnce() + Send + 'scope> = Box::new(f);
-        // SAFETY: меняется только лайфтайм trait-объекта, раскладка `Box<dyn ...>` та же.
-        // Замыкание живёт не дольше `'scope`: счётчик `pending` увеличен выше и уменьшается
-        // только в `DoneGuard::drop` — после того как замыкание выполнено или уничтожено.
-        // `scope()` не возвращает управление (ни нормально, ни паникой), пока `pending`
-        // не равен нулю, а если ожидание прервано паникой — аварийно завершает процесс.
-        // `'scope` — заимствование локальной `TaskScope` внутри `scope()`, поэтому оно
-        // заканчивается до возврата, а всё, что захвачено с лайфтаймом `>= 'scope`, ещё живо.
+        // SAFETY: only the trait object's lifetime changes; the layout of `Box<dyn ...>` is the same.
+        // The closure lives no longer than `'scope`: the `pending` counter was incremented above and is
+        // decremented only in `DoneGuard::drop`, after the closure has run or been destroyed.
+        // `scope()` does not return (neither normally nor by panic) while `pending` is non-zero,
+        // and if the wait is interrupted by a panic, it aborts the process.
+        // `'scope` is a borrow of the local `TaskScope` inside `scope()`, so it ends before
+        // the return, and everything captured with a lifetime `>= 'scope` is still alive.
         let erased: ErasedFn =
             unsafe { std::mem::transmute::<Box<dyn FnOnce() + Send + 'scope>, ErasedFn>(boxed) };
         ScopedTask {
@@ -230,8 +229,8 @@ impl<'scope, D> TaskScope<'scope, '_, D> {
         }
     }
 
-    /// Задача из слота на стеке, без аллокации. Слот должен пережить область (`&'scope`);
-    /// каждый слот отдаётся только одной задаче — повторный вызов вернёт `None`.
+    /// A task from a slot on the stack, with no allocation. The slot must outlive the scope (`&'scope`);
+    /// each slot is handed to only one task, so a repeated call returns `None`.
     pub fn task_in<F>(&self, slot: &'scope StackSlot<F>) -> Option<ScopedTask>
     where
         F: FnOnce() + Send + 'scope,
@@ -240,8 +239,8 @@ impl<'scope, D> TaskScope<'scope, '_, D> {
             return None;
         }
         let done = self.register();
-        // Указатель живёт столько же, сколько заимствование `&'scope StackSlot<F>`: слот
-        // переживает область, а область ждёт завершения задачи (см. SAFETY в `task`).
+        // The pointer lives as long as the `&'scope StackSlot<F>` borrow: the slot
+        // outlives the scope, and the scope waits for the task to finish (see SAFETY in `task`).
         Some(ScopedTask {
             body: TaskBody::Slot {
                 slot: std::ptr::from_ref(slot).cast::<()>(),
@@ -253,8 +252,8 @@ impl<'scope, D> TaskScope<'scope, '_, D> {
     }
 }
 
-/// Счётчики завершившихся областей, готовые к повторному использованию: аллокация на
-/// каждый `join` стоила бы дороже самого `join`.
+/// Counters of finished scopes, ready for reuse: an allocation per
+/// `join` would cost more than the `join` itself.
 #[cfg(not(loom))]
 mod counter_cache {
     use std::cell::RefCell;
@@ -276,15 +275,15 @@ mod counter_cache {
             .unwrap_or_else(|| Arc::new(AtomicCounter::new(0)))
     }
 
-    /// Вызывается, пока область ещё владеет счётчиком.
+    /// Called while the scope still owns the counter.
     pub(super) fn give_back(counter: &Arc<AtomicCounter>) {
-        // Ноль значит, что каждая задача области уже сделала свой единственный `decrement`.
-        // Клоны `Arc` ещё могут жить у задач в хвосте `decrement` (после перехода в ноль): там
-        // читается `waiters` и, возможно, будятся ожидающие. Счётчик хвост не меняет, а лишнее
-        // пробуждение ожидающих следующей области безвредно — они перепроверяют значение.
-        // Требовать `strong_count == 1` нельзя: эта гонка частая, и каждая проигранная стоила
-        // бы аллокации нового счётчика в следующей области (кадр графа перестал бы быть
-        // без аллокаций).
+        // Zero means every task of the scope has already made its single `decrement`.
+        // `Arc` clones may still live in tasks in the tail of `decrement` (after reaching zero): there
+        // `waiters` is read and waiters may be woken. The tail does not change the count, and a spurious
+        // wakeup of the next scope's waiters is harmless: they recheck the value.
+        // Requiring `strong_count == 1` is not an option: this race is frequent, and each lost one
+        // would cost an allocation of a new counter in the next scope (the graph frame would stop
+        // being allocation-free).
         if !counter.is_zero() {
             return;
         }
@@ -311,16 +310,16 @@ mod counter_cache {
     pub(super) fn give_back(_counter: &Arc<AtomicCounter>) {}
 }
 
-/// Запускает область задач с заимствованиями.
+/// Runs a scope of tasks with borrows.
 ///
-/// `body` создаёт задачи через [`TaskScope::task`] и отдаёт их исполнителю. После `body`
-/// функция ждёт завершения всех задач, вызывая `help` (help-while-wait, см.
-/// [`AtomicCounter::wait_while_helping`]) и возвращает результат `body`. Чтобы прочитать
-/// результаты задач после области (например, собранные ошибки), положите в `data` ссылку
-/// на свои локальные данные.
+/// `body` creates tasks via [`TaskScope::task`] and hands them to an executor. After `body`
+/// the function waits for all tasks to finish, calling `help` (help-while-wait, see
+/// [`AtomicCounter::wait_while_helping`]), and returns the result of `body`. To read the
+/// tasks' results after the scope (for example collected errors), put a reference to your
+/// local data into `data`.
 ///
-/// Паника в `body` пробрасывается после того, как все задачи завершены. Паника в `help`
-/// приводит к `abort`: продолжать раскрутку стека, пока задачи держат ссылки на него, нельзя.
+/// A panic in `body` is propagated after all tasks have finished. A panic in `help`
+/// leads to `abort`: unwinding the stack cannot continue while tasks hold references into it.
 pub fn scope<'env, D, T>(
     data: D,
     body: impl for<'scope> FnOnce(&'scope TaskScope<'scope, 'env, D>) -> T,
@@ -352,7 +351,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Простейший исполнитель: задачи уходят в канал, их выполняют другие потоки.
+    /// The simplest executor: tasks go into a channel and other threads run them.
     #[test]
     fn tasks_borrow_stack_data_across_threads() {
         let mut data = vec![0_u64; 64];
@@ -478,7 +477,7 @@ mod tests {
                 || false,
             );
         });
-        // Слот держит `&mut out` до конца своей жизни.
+        // The slot holds `&mut out` until the end of its life.
         let _ = slot;
         assert_eq!(out, 42);
     }

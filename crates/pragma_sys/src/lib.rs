@@ -1,21 +1,21 @@
-//! L1: платформенный слой `pragma.core` — имена, приоритеты и привязка потоков к ядрам.
+//! L1: the platform layer of `pragma.core`: thread names, priorities and core pinning.
 //!
-//! Второй (после `pragma_sync`) крейт, где разрешён `unsafe` (`layers.toml`, DECISIONS #27):
-//! здесь живут только вызовы системных FFI (`windows-sys` на Windows, `libc` на Linux), каждый
-//! с комментарием `// SAFETY:`. Остальные крейты пользуются безопасным API отсюда, в
-//! `pragma_jobs` он доступен как `pragma_jobs::sys`.
+//! The second crate (after `pragma_sync`) where `unsafe` is allowed (`layers.toml`, DECISIONS #27):
+//! it contains only system FFI calls (`windows-sys` on Windows, `libc` on Linux), each
+//! with a `// SAFETY:` comment. Other crates use the safe API from here; in
+//! `pragma_jobs` it is available as `pragma_jobs::sys`.
 //!
-//! Все функции действуют на **текущий** поток. На других платформах они возвращают
-//! [`SysError::Unsupported`], а не паникуют: платформенные настройки — оптимизация, без
-//! которой ядро работает.
+//! All functions act on the **current** thread. On other platforms they return
+//! [`SysError::Unsupported`] instead of panicking: platform tuning is an optimization the
+//! core works without.
 //!
 //! ```
 //! use pragma_sys::{ThreadPriority, set_current_thread_name, set_current_thread_priority};
 //!
 //! std::thread::spawn(|| {
 //!     set_current_thread_name("asset-loader")?;
-//!     // Понизить приоритет можно без прав администратора; повышение может вернуть
-//!     // `SysError::PermissionDenied` (Linux без CAP_SYS_NICE).
+//!     // Lowering the priority needs no admin rights; raising it may return
+//!     // `SysError::PermissionDenied` (Linux without CAP_SYS_NICE).
 //!     set_current_thread_priority(ThreadPriority::Low)?;
 //!     Ok::<(), pragma_sys::SysError>(())
 //! })
@@ -40,33 +40,33 @@ mod imp;
 
 pub use error::SysError;
 
-/// Приоритет потока относительно остальных потоков процесса.
+/// Thread priority relative to the other threads of the process.
 ///
 /// | | Windows | Linux (nice) |
 /// |---|---|---|
 /// | `Low` | `THREAD_PRIORITY_BELOW_NORMAL` | 10 |
 /// | `Normal` | `THREAD_PRIORITY_NORMAL` | 0 |
-/// | `High` | `THREAD_PRIORITY_ABOVE_NORMAL` | −5 (нужен `CAP_SYS_NICE`) |
+/// | `High` | `THREAD_PRIORITY_ABOVE_NORMAL` | −5 (requires `CAP_SYS_NICE`) |
 ///
-/// На Linux без прав нельзя и вернуть `nice` назад к меньшему значению: после `Low` вызов
-/// `Normal` вернёт [`SysError::PermissionDenied`].
+/// On Linux without privileges `nice` cannot be moved back to a lower value either: after `Low`,
+/// a call with `Normal` returns [`SysError::PermissionDenied`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum ThreadPriority {
-    /// Ниже обычного: фоновая работа, которая не должна мешать кадру.
+    /// Below normal: background work that must not disturb the frame.
     Low,
-    /// Обычный приоритет ОС.
+    /// The regular OS priority.
     #[default]
     Normal,
-    /// Выше обычного: потоки кадра.
+    /// Above normal: frame threads.
     High,
 }
 
-/// Задаёт имя текущего потока, видимое в отладчике и профайлере.
+/// Sets the name of the current thread, as seen in a debugger and a profiler.
 ///
-/// Потоки пула `pragma_jobs` уже названы через `std::thread::Builder`; функция нужна для
-/// потоков, созданных не через `Builder` (например, главного). Имя обрезается по границе
-/// символа: на Linux до 15 байт (ограничение ядра), на Windows до 256 единиц UTF-16.
+/// `pragma_jobs` pool threads are already named via `std::thread::Builder`; this function is for
+/// threads created without a `Builder` (for example the main one). The name is truncated at a
+/// character boundary: to 15 bytes on Linux (a kernel limit), to 256 UTF-16 units on Windows.
 pub fn set_current_thread_name(name: &str) -> Result<(), SysError> {
     if name.contains('\0') {
         return Err(SysError::InvalidName);
@@ -74,29 +74,29 @@ pub fn set_current_thread_name(name: &str) -> Result<(), SysError> {
     imp::set_current_thread_name(name)
 }
 
-/// Задаёт приоритет текущего потока.
+/// Sets the priority of the current thread.
 pub fn set_current_thread_priority(priority: ThreadPriority) -> Result<(), SysError> {
     imp::set_current_thread_priority(priority)
 }
 
-/// Приоритет текущего потока, приведённый к [`ThreadPriority`] (любое значение ниже
-/// обычного — `Low`, выше — `High`).
+/// The priority of the current thread, mapped to [`ThreadPriority`] (any value below
+/// normal is `Low`, any value above is `High`).
 pub fn current_thread_priority() -> Result<ThreadPriority, SysError> {
     imp::current_thread_priority()
 }
 
-/// Привязывает текущий поток к логическому ядру `core` (нумерация с нуля).
+/// Pins the current thread to logical core `core` (zero-based).
 ///
-/// На Windows поддерживаются ядра первой группы процессоров (`core < 64`), на Linux —
-/// `core < 1024` (`CPU_SETSIZE`); ядро вне диапазона — [`SysError::InvalidCore`].
+/// On Windows, cores of the first processor group are supported (`core < 64`); on Linux,
+/// `core < 1024` (`CPU_SETSIZE`); a core out of range is [`SysError::InvalidCore`].
 pub fn pin_current_thread(core: usize) -> Result<(), SysError> {
     imp::pin_current_thread(core)
 }
 
-/// Логическое ядро, на котором поток исполняется сейчас (`None`, если ОС не сообщает).
+/// The logical core the thread is running on right now (`None` if the OS does not report it).
 ///
-/// Без привязки значение может измениться сразу после вызова; годится для диагностики и
-/// для проверки [`pin_current_thread`].
+/// Without pinning, the value may change right after the call; it is good for diagnostics and
+/// for checking [`pin_current_thread`].
 #[must_use]
 pub fn current_core() -> Option<usize> {
     imp::current_core()
@@ -106,7 +106,7 @@ pub fn current_core() -> Option<usize> {
 mod tests {
     use super::*;
 
-    /// Каждая проверка — в своём потоке: приоритет и привязка меняются у текущего потока.
+    /// Each check runs on its own thread: priority and pinning change the current thread.
     fn on_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         std::thread::spawn(f).join().unwrap()
     }
@@ -148,7 +148,7 @@ mod tests {
     fn pinned_thread_runs_on_its_core() {
         let core = on_thread(|| {
             pin_current_thread(0).unwrap();
-            // Перенос на нужное ядро — при следующем планировании.
+            // The move to the target core happens at the next scheduling point.
             std::thread::yield_now();
             current_core()
         });

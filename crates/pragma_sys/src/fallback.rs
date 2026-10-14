@@ -1,4 +1,4 @@
-//! Платформы вне DECISIONS #2: операции не поддерживаются, но и не паникуют.
+//! Platforms outside DECISIONS #2: the operations are not supported, but do not panic either.
 
 use crate::{SysError, ThreadPriority};
 

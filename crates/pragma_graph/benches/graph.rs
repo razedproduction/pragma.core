@@ -1,8 +1,8 @@
-//! Накладные расходы кадра графа: 50 задач над 10 ресурсами (как в `tests/alloc.rs`).
+//! Frame graph overhead: 50 tasks over 10 resources (as in `tests/alloc.rs`).
 //!
-//! `cargo bench -p pragma_graph`. Эталон — те же системы, вызванные по очереди на одном потоке
-//! в стабильном порядке графа: разница — цена планирования, а не работы.
-// Бенч: паника = провал прогона.
+//! `cargo bench -p pragma_graph`. The baseline is the same systems called one after another on one
+//! thread in the graph's stable order: the difference is the cost of scheduling, not of the work.
+// Bench: a panic is a failed run.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -36,7 +36,7 @@ fn task<const W: usize, const RD: usize>(g: &mut FrameGraphBuilder, name: String
     );
 }
 
-/// Две независимые цепочки ресурсов (0–4 и 5–9): граф даёт параллелизм 2 и больше.
+/// Two independent resource chains (0–4 and 5–9): the graph gives a parallelism of 2 or more.
 fn graph() -> FrameGraph {
     let mut g = FrameGraph::builder().ordered();
     for i in 0..5 {
@@ -79,7 +79,7 @@ fn bench(c: &mut Criterion) {
             b.iter(|| graph.run(&pool, &mut res).unwrap());
         });
 
-        // Эталон: те же 50 вызовов последовательно, без планировщика.
+        // Baseline: the same 50 calls sequentially, without the scheduler.
         let mut data: Vec<Vec<u64>> = (0..10).map(|_| vec![1; len]).collect();
         group.bench_function(format!("sequential/{len}"), |b| {
             b.iter(|| {

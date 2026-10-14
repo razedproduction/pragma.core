@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [features]
-# Области `scope`/`parallel_*` в профайлере кадра puffin (DECISIONS.md #29).
+# `scope`/`parallel_*` regions in the puffin frame profiler (DECISIONS.md #29).
 puffin = ["dep:puffin"]
 
 [dependencies]

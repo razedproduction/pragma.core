@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [features]
-# Кадр и задачи графа в профайлере puffin (DECISIONS.md #29).
+# The graph frame and its tasks in the puffin profiler (DECISIONS.md #29).
 puffin = ["dep:puffin", "pragma_jobs/puffin"]
 
 [dependencies]

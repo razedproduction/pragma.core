@@ -1,6 +1,6 @@
-//! Property-тесты графа: произвольные описания → либо ошибка, предсказанная оракулом, либо
-//! корректный стабильный порядок, а исполнение соблюдает рёбра (`tests/oracle/mod.rs`).
-// Тестовый код: паника = провал теста.
+//! Graph property tests: arbitrary descriptions → either the error predicted by the oracle or a
+//! correct stable order, and execution respects the edges (`tests/oracle/mod.rs`).
+// Test code: a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 mod oracle;
@@ -33,7 +33,7 @@ proptest! {
         bytes in proptest::collection::vec(any::<u8>(), 0..64),
         pool_index in 0_usize..3,
     ) {
-        // Бит `ordered` всегда поднят: так большинство описаний собирается и исполняется.
+        // The `ordered` bit is always set: this way most descriptions build and run.
         let mut bytes = bytes;
         if let Some(first) = bytes.first_mut() {
             *first |= 1;
@@ -43,7 +43,7 @@ proptest! {
 }
 
 proptest! {
-    // Каждый случай строит тысячи задач: немного случаев, все три формы встречаются.
+    // Each case builds thousands of tasks: few cases, and all three shapes occur.
     #![proptest_config(ProptestConfig::with_cases(12))]
 
     #[test]
@@ -54,8 +54,8 @@ proptest! {
 
 #[test]
 fn decoder_covers_every_outcome() {
-    // Сами по себе случайные байты почти всегда дают ошибку; убеждаемся, что декодер
-    // порождает и успешные графы, и каждый вид ошибки.
+    // Random bytes by themselves almost always produce an error; make sure the decoder
+    // produces both successful graphs and every kind of error.
     use pragma_graph::GraphError;
     let mut seen = [false; 5];
     let mut state = 0x2545_F491_4F6C_DD1D_u64;
@@ -102,6 +102,6 @@ fn decoder_covers_every_outcome() {
             *s = true;
         }
     }
-    // Без ресурсов в этой сборке конфликтов нет, слот 4 не обязателен.
+    // Without resources there are no conflicts in this build, so slot 4 is optional.
     assert!(seen[..4].iter().all(|&s| s), "{seen:?}");
 }

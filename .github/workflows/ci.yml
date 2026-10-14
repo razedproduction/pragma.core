@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    # Обычно 2–5 мин; зависший тест должен падать быстро, а не висеть 6 ч по умолчанию.
+    # Usually 2–5 min; a hung test must fail fast rather than hang for the default 6 h.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -29,12 +29,12 @@ jobs:
       - run: cargo clippy -p pragma_core --no-default-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps --all-features
-      # Обязательный набор детерминизма (M5): 5 сценариев (seed, число сущностей, тик
-      # применения загрузки) на 1, 2 и N воркерах (N = ядра раннера − 1, без переподписки),
-      # мгновенная и запаздывающая загрузка, idle_spin, PoolStats, watchdog, подписчик tracing.
-      # Тот же набор в debug (watchdog активен) — тест frame_sim/tests/suite.rs выше.
+      # The mandatory determinism suite (M5): 5 scenarios (seed, entity count, load apply
+      # tick) on 1, 2 and N workers (N = runner cores − 1, no oversubscription),
+      # instant and delayed load, idle_spin, PoolStats, watchdog, tracing subscriber.
+      # The same suite in debug (watchdog active) is the frame_sim/tests/suite.rs test above.
       - run: cargo run -p frame_sim --release -- --suite --ticks 200
-      # Watchdog есть только в debug: в release тот же тест проверяет, что предупреждений нет.
+      # The watchdog exists only in debug: in release the same test checks that there are no warnings.
       - run: cargo test -p pragma_jobs --release --test watchdog
 
   features:
@@ -47,7 +47,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-hack
-      # Каждая фича фасада по отдельности (и без фич) собирается и проходит clippy.
+      # Every facade feature on its own (and no features) builds and passes clippy.
       - run: cargo hack clippy --workspace --each-feature --no-dev-deps -- -D warnings
 
   fuzz:
@@ -62,9 +62,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      # Отдельный workspace `fuzz/` (libFuzzer — C++, DECISIONS #20). Таргет — явно: готовый
-      # бинарник cargo-fuzz собран под musl и по умолчанию берёт свою платформу, а ASan
-      # несовместим со статической libc musl.
+      # A separate `fuzz/` workspace (libFuzzer is C++, DECISIONS #20). The target is explicit: the
+      # prebuilt cargo-fuzz binary is built for musl and defaults to its own platform, while ASan
+      # is incompatible with musl's static libc.
       - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu graph_build -- -max_total_time=60
         env:
           RUSTFLAGS: ""
@@ -96,8 +96,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: rustup show
-      # Счётчик unsafe (layers.toml [unsafe_budget]): в PR рост бюджета сверяется с базовой
-      # ревизией и требует новой записи DECISIONS.md.
+      # The unsafe counter (layers.toml [unsafe_budget]): in a PR, budget growth is checked against the
+      # base revision and requires a new DECISIONS.md entry.
       - name: audit
         shell: bash
         run: |
@@ -125,8 +125,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-semver-checks
-      # Baseline — main (DECISIONS #33): ломающее изменение публичного API без подъёма
-      # минорной версии (0.x) роняет PR.
+      # The baseline is main (DECISIONS #33): a breaking public API change without a minor
+      # version bump (0.x) fails the PR.
       - run: cargo semver-checks --workspace --baseline-rev ${{ github.event.pull_request.base.sha }}
 
   bench:
@@ -149,8 +149,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: bench-gate
-      # A/B вперемешку main ↔ PR на одном раннере (DECISIONS #34, docs/perf.md §6):
-      # регрессия > 10% сверх сдвига эталона (rayon / последовательный код) роняет PR.
+      # Interleaved A/B of main ↔ PR on one runner (DECISIONS #34, docs/perf.md §6):
+      # a regression > 10% beyond the reference shift (rayon / sequential code) fails the PR.
       - name: bench gate
         shell: bash
         run: |
@@ -167,9 +167,9 @@ jobs:
       - run: cargo +nightly miri test -p pragma_sync
         env:
           RUSTFLAGS: ""
-      # Пул из 1 воркера поверх всего unsafe pragma_sync (DECISIONS #38): Tree Borrows —
-      # crossbeam-epoch нарушает экспериментальные Stacked Borrows; утечки — его глобальный
-      # сборщик (static, освобождает мешки лениво), не память пула.
+      # A 1-worker pool over all of pragma_sync's unsafe (DECISIONS #38): Tree Borrows, because
+      # crossbeam-epoch violates the experimental Stacked Borrows; the leaks are its global
+      # collector (static, frees bags lazily), not pool memory.
       - run: cargo +nightly miri test -p pragma_jobs --test miri
         env:
           RUSTFLAGS: ""
@@ -182,7 +182,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
-      # Доктесты работают с реальными потоками вне loom::model, поэтому только lib и tests.
+      # Doctests use real threads outside loom::model, hence only lib and tests.
       - run: cargo test -p pragma_sync --release --lib --tests
         env:
           RUSTFLAGS: --cfg loom

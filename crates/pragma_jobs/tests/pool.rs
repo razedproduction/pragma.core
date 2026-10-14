@@ -1,5 +1,5 @@
-//! Поведенческие тесты пула: жизненный цикл, паники, вложенность, приоритеты.
-// Тестовый код: паника = провал теста, переполнение исключено размерами входа.
+//! Behavioral tests of the pool: lifecycle, panics, nesting, priorities.
+// Test code: a panic is a test failure; overflow is ruled out by the input sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -39,7 +39,7 @@ fn threads_are_named() {
     )
     .unwrap();
     let name = pool
-        // Background: внешний поток в join() не исполняет фоновые задачи, значит, это воркер.
+        // Background: an external thread in join() does not run background tasks, so this is a worker.
         .spawn(Priority::Background, || {
             std::thread::current().name().map(str::to_owned)
         })
@@ -72,7 +72,7 @@ fn panic_becomes_error_and_worker_survives() {
         matches!(&err, JobError::Panicked { job, message, .. } if job == "spawn" && message == "boom"),
         "{err:?}"
     );
-    // Единственный воркер жив и продолжает работать.
+    // The only worker is alive and keeps working.
     assert_eq!(pool.spawn(Priority::Frame, || 7).join().unwrap(), 7);
 }
 
@@ -80,7 +80,7 @@ fn panic_becomes_error_and_worker_survives() {
 fn nested_join_on_one_worker_does_not_deadlock() {
     let pool = pool(1);
     assert_eq!(fib(&pool, 20), 6765);
-    // То же изнутри задачи единственного воркера.
+    // The same from inside a task of the only worker.
     let pool = Arc::new(pool);
     let inner = Arc::clone(&pool);
     let handle = pool.spawn(Priority::Normal, move || fib(&inner, 18));
@@ -278,7 +278,7 @@ fn frame_work_runs_while_background_is_saturated() {
             })
         })
         .collect();
-    // Фон занимает не больше одного воркера, второй свободен для кадра.
+    // Background work occupies at most one worker; the second one is free for the frame.
     let frame = pool.spawn(Priority::Frame, || 42);
     assert_eq!(frame.join().unwrap(), 42);
     release.store(1, Ordering::SeqCst);
@@ -339,7 +339,7 @@ fn drop_with_cancel_policy_cancels_pending_jobs() {
             }
         })
     };
-    // Ждём, пока единственный воркер займётся блокирующей задачей.
+    // Wait until the only worker is busy with the blocking task.
     while started.load(Ordering::SeqCst) == 0 {
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -360,7 +360,7 @@ fn drop_with_cancel_policy_cancels_pending_jobs() {
     drop(pool);
     opener.join().unwrap();
     blocker.join().unwrap();
-    // Все задачи либо выполнены, либо отменены; ни одна не утекла.
+    // Every task has either run or been cancelled; none leaked.
     assert_eq!(Arc::strong_count(&sentinel), 1);
     for h in pending {
         match h.join() {
@@ -386,13 +386,13 @@ fn external_waiter_helps_when_workers_are_busy() {
             }
         })
     };
-    // Ждём, пока `busy` не начнёт исполняться на воркере. Иначе воркер может украсть ветвь
-    // `join`, а главный поток, помогая в ожидании, сам возьмёт `busy` из очереди и будет
-    // ждать `gate`, который никто, кроме него, не поднимет (зависание на 2 vCPU в CI).
+    // Wait until `busy` starts running on the worker. Otherwise the worker may steal the `join`
+    // branch, while the main thread, helping as it waits, takes `busy` from the queue itself and
+    // waits for a `gate` that nobody but it would raise (a hang on 2 vCPUs in CI).
     while gate.load(Ordering::SeqCst) == QUEUED {
         std::thread::sleep(Duration::from_millis(1));
     }
-    // Воркер занят; главный поток сам исполнит обе ветви.
+    // The worker is busy; the main thread runs both branches itself.
     let (a, b) = pool.join(|| 1, || 2).unwrap();
     assert_eq!(a + b, 3);
     let mut v = vec![1_u32; 256];
@@ -405,8 +405,8 @@ fn external_waiter_helps_when_workers_are_busy() {
 
 #[test]
 fn external_context_is_reused_across_pools() {
-    // Контекст внешнего слота кэшируется в потоке (DECISIONS #18): переключение между пулами,
-    // вложенный вход в другой пул и удаление пула не должны ни терять слоты, ни путать пулы.
+    // The external slot context is cached per thread (DECISIONS #18): switching between pools,
+    // nested entry into another pool and dropping a pool must neither lose slots nor mix up pools.
     let a = pool(2);
     for round in 0..50_u32 {
         let b = pool(1);
@@ -422,7 +422,7 @@ fn external_context_is_reused_across_pools() {
             .unwrap();
         assert!(v.iter().all(|&x| x == round));
     }
-    // Все 4 внешних слота по-прежнему доступны: 4 внешних потока ждут одновременно.
+    // All 4 external slots are still available: 4 external threads wait at the same time.
     let a = &a;
     std::thread::scope(|ts| {
         for _ in 0..4 {
@@ -441,11 +441,11 @@ fn pool_dropped_inside_its_own_job_does_not_hang() {
         1
     });
     drop(pool);
-    // Последняя ссылка уходит внутри задачи; Drop не должен join-ить собственный поток.
+    // The last reference goes away inside the task; Drop must not join its own thread.
     assert_eq!(handle.join().unwrap(), 1);
 }
 
-/// Сбросы помеченного значения: задача, отклонённая пулом, должна быть сброшена.
+/// Counts drops of a marked value: a task rejected by the pool must be dropped.
 struct DropFlag(Arc<AtomicUsize>);
 
 impl Drop for DropFlag {
@@ -470,7 +470,7 @@ fn spawner_runs_detached_jobs() {
                 .unwrap();
         }
     }
-    drop(pool); // `Drain`: всё принятое доработает
+    drop(pool); // `Drain`: everything accepted runs to completion
     assert_eq!(counter.load(Ordering::SeqCst), 300);
 }
 
@@ -513,8 +513,8 @@ fn spawner_knows_pool_context() {
 
 #[test]
 fn spawner_racing_with_shutdown_never_loses_jobs() {
-    // Каждая задача либо исполнена, либо сброшена — ни одна не застревает в очереди
-    // остановленного пула.
+    // Every task is either run or dropped; none gets stuck in the queue
+    // of a stopped pool.
     for _ in 0..200 {
         let pool = pool(2);
         let spawner = pool.spawner();

@@ -1,34 +1,34 @@
 //! # pragma.core
 //!
-//! Надёжное и высокопроизводительное многопоточное ядро на чистом Rust для
-//! игровых движков и фреймворков.
+//! A solid, high-performance multithreaded core in pure Rust for
+//! game engines and frameworks.
 //!
-//! Фасад: re-export подсистем за feature-флагами и `prelude`.
+//! The facade: re-exports of the subsystems behind feature flags, and a `prelude`.
 //!
-//! | Модуль | Крейт | Feature |
+//! | Module | Crate | Feature |
 //! |---|---|---|
-//! | [`base`] | `pragma_base` | всегда |
-//! | [`sync`] | `pragma_sync` | всегда |
+//! | [`base`] | `pragma_base` | always |
+//! | [`sync`] | `pragma_sync` | always |
 //! | `jobs` | `pragma_jobs` | `jobs` |
 //! | `graph` | `pragma_graph` | `graph` |
 //! | `tasks` | `pragma_async` | `async` |
-//! | `sys` | `pragma_sys` (через `pragma_jobs::sys`) | `jobs` |
-//! | `puffin` | `puffin` 0.19 (re-export той же версии) | `puffin` |
+//! | `sys` | `pragma_sys` (via `pragma_jobs::sys`) | `jobs` |
+//! | `puffin` | `puffin` 0.19 (a re-export of the same version) | `puffin` |
 //!
-//! Feature `puffin` добавляет области профайлера на `scope`/`parallel_*` и на задачи графа;
-//! кадр размечает приложение (`puffin::GlobalProfiler::lock().new_frame()`), запись включает
-//! `puffin::set_scopes_on(true)`.
+//! The `puffin` feature adds profiler scopes to `scope`/`parallel_*` and to graph tasks;
+//! the application marks frames (`puffin::GlobalProfiler::lock().new_frame()`), and recording is
+//! enabled with `puffin::set_scopes_on(true)`.
 //!
-//! ## Гарантии semver
+//! ## Semver guarantees
 //!
-//! Публичный API всех модулей следует semver, кроме:
-//! - feature `puffin` и re-export [`puffin`](https://docs.rs/puffin): версия puffin
-//!   поднимается в минорном релизе (puffin ещё не 1.0);
-//! - скрытых из документации элементов (`#[doc(hidden)]`, например `pragma_sync::__private`) —
-//!   это внутренности для крейтов самого ядра.
+//! The public API of all modules follows semver, except for:
+//! - the `puffin` feature and the [`puffin`](https://docs.rs/puffin) re-export: the puffin version
+//!   is bumped in a minor release (puffin is not 1.0 yet);
+//! - items hidden from the documentation (`#[doc(hidden)]`, for example `pragma_sync::__private`):
+//!   these are internals for the core's own crates.
 //!
-//! Логи ядро пишет через `tracing` 0.1: подписчика ставит приложение своей зависимостью
-//! `tracing`.
+//! The core logs through `tracing` 0.1: the application installs a subscriber through its own
+//! `tracing` dependency.
 //!
 //! ```
 //! use pragma_core::prelude::*;
@@ -42,7 +42,7 @@
 
 pub use pragma_base as base;
 
-/// Примитивы синхронизации (стабильная часть `pragma_sync`).
+/// Synchronization primitives (the stable part of `pragma_sync`).
 pub mod sync {
     pub use pragma_sync::{AtomicCounter, CountLatch, SyncError, TaskLabel, current_label};
 }
@@ -50,11 +50,11 @@ pub mod sync {
 #[cfg(feature = "jobs")]
 pub use pragma_jobs as jobs;
 
-/// Платформенный слой: имена, приоритеты потоков, привязка к ядрам.
+/// The platform layer: thread names, priorities, core pinning.
 #[cfg(feature = "jobs")]
 pub use pragma_jobs::sys;
 
-/// Версия `puffin`, с которой собрано ядро: кадры размечайте через неё.
+/// The `puffin` version the core is built with: mark frames through it.
 #[cfg(feature = "puffin")]
 pub use puffin;
 
@@ -64,7 +64,7 @@ pub use pragma_graph as graph;
 #[cfg(feature = "async")]
 pub use pragma_async as tasks;
 
-/// Часто используемые типы одним импортом.
+/// Frequently used types in a single import.
 pub mod prelude {
     pub use pragma_base::{Handle, HandlePool, Tick};
     pub use pragma_sync::CountLatch;

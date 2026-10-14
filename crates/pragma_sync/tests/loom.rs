@@ -1,8 +1,8 @@
-//! loom-модели атомарных протоколов `pragma_sync`.
+//! loom models of the `pragma_sync` atomic protocols.
 //!
-//! Запуск: `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests`.
-//! Каждая модель перебирает все допустимые чередования потоков; зависание (потерянное
-//! пробуждение) loom сообщает как дедлок.
+//! Run: `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests`.
+//! Each model explores all permitted thread interleavings; loom reports a hang (a lost
+//! wakeup) as a deadlock.
 #![cfg(loom)]
 
 use loom::sync::Arc;
@@ -14,9 +14,9 @@ use pragma_sync::{AtomicCounter, CountLatch};
 
 #[test]
 fn stack_join_owner_never_misses_thief() {
-    // Протокол латча `join_on_stack`: владелец помогает, затем объявляет сон и паркуется;
-    // вор исполняет задачу и, если владелец объявил сон, будит его. Дедлок = потерянное
-    // пробуждение; после возврата владельца кадр уничтожен — вор его уже не трогает.
+    // The `join_on_stack` latch protocol: the owner helps, then announces sleep and parks;
+    // the thief runs the job and wakes the owner if it announced sleep. A deadlock means a lost
+    // wakeup; once the owner returns the frame is gone, and the thief no longer touches it.
     loom::model(|| {
         let parker = Parker::new();
         let unparker = parker.unparker();
@@ -82,7 +82,7 @@ fn parker_never_loses_wakeup() {
                 unparker.unpark();
             })
         };
-        // Классический цикл ожидания условия: unpark после store не может потеряться.
+        // The classic wait-for-condition loop: an unpark after the store cannot be lost.
         while flag.load(Ordering::Acquire) == 0 {
             parker.park();
         }
@@ -103,8 +103,8 @@ fn parker_timeout_path_never_loses_wakeup() {
                 unparker.unpark();
             })
         };
-        // В loom таймаут не срабатывает, поэтому модель проверяет, что ветка
-        // `park_timeout` тоже не теряет пробуждение.
+        // In loom the timeout never fires, so the model checks that the `park_timeout`
+        // path does not lose a wakeup either.
         while flag.load(Ordering::Acquire) == 0 {
             parker.park_timeout(std::time::Duration::from_millis(1));
         }
@@ -134,9 +134,9 @@ fn counter_wait_sees_last_decrement() {
 
 #[test]
 fn last_arrival_sees_every_predecessor() {
-    // Граф кадра: две задачи-предшественника пишут свои данные (Relaxed — без собственной
-    // синхронизации) и прибывают; прибывший последним «запускает последователя» и обязан
-    // увидеть обе записи. Ровно один из двух — последний.
+    // A frame graph: two predecessor tasks write their data (Relaxed, with no synchronization of
+    // their own) and arrive; the last to arrive "launches the successor" and must see both
+    // writes. Exactly one of the two is the last.
     loom::model(|| {
         let arrival = Arc::new(ArrivalCounter::new(2));
         let data: Arc<[AtomicUsize; 2]> = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
@@ -171,7 +171,7 @@ fn counter_increment_while_waiting() {
         let t = {
             let counter = Arc::clone(&counter);
             thread::spawn(move || {
-                // Задача порождает дочернюю до своего завершения — счётчик не падает в ноль раньше времени.
+                // The task spawns a child before finishing, so the counter does not hit zero prematurely.
                 counter.increment().unwrap();
                 counter.decrement();
                 counter.decrement();

@@ -9,9 +9,6 @@
 **pragma.core** is a pure-Rust, solid and high-performance multithreaded core for
 razed.production's game engines and frameworks.
 
-> **Русский:** pragma.core — надёжное и высокопроизводительное многопоточное ядро на
-> чистом Rust для игровых движков и фреймворков. Документация проекта — в [`docs/`](docs/README.md).
-
 It is the layer *under* an engine: it owns the threads, schedules the work of a frame
 and runs background I/O, so that ECS, rendering, physics and audio can be written on top
 of it without each inventing their own thread pool.

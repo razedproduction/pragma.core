@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "examples/*"]
-# Отдельный workspace cargo-fuzz (DECISIONS.md #20).
+# A separate cargo-fuzz workspace (DECISIONS.md #20).
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -32,9 +32,9 @@ async-task = "4.7.1"
 futures-lite = "2.6.1"
 thiserror = "2.0.21"
 tracing = "0.1.44"
-# Профайлер кадра за feature `puffin` (DECISIONS.md #29). 0.20 требует Rust 1.92 > MSRV.
+# Frame profiler behind the `puffin` feature (DECISIONS.md #29). 0.20 requires Rust 1.92 > MSRV.
 puffin = { version = "0.19.1", default-features = false }
-# Системные FFI только в pragma_sys (DECISIONS.md #27).
+# System FFI only in pragma_sys (DECISIONS.md #27).
 windows-sys = "0.61.2"
 libc = "0.2.190"
 
@@ -42,7 +42,7 @@ libc = "0.2.190"
 proptest = "1.12.0"
 criterion = "0.8.2"
 loom = "0.7.2"
-# Только эталон в бенчах pragma_jobs (DECISIONS.md #14).
+# Only a baseline in the pragma_jobs benches (DECISIONS.md #14).
 rayon = "1.11.0"
 
 [workspace.lints.rust]

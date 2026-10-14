@@ -7,11 +7,11 @@ use crate::GraphError;
 use crate::plan::Access;
 use crate::resources::{Borrow, Res, ResMut, Resources};
 
-/// Окружение задачи графа на время её исполнения.
+/// The environment of a graph task while it runs.
 ///
-/// Доступ к ресурсам проверяется по объявлению задачи: [`read`](Self::read) разрешён для
-/// объявленных `reads`/`writes`, [`write`](Self::write) — только для `writes`. Через
-/// [`pool`](Self::pool) задача может распараллелить свою работу (`parallel_for`, `join`, `scope`).
+/// Resource access is checked against the task's declaration: [`read`](Self::read) is allowed for
+/// declared `reads`/`writes`, [`write`](Self::write) only for `writes`. Through
+/// [`pool`](Self::pool) a task can parallelize its own work (`parallel_for`, `join`, `scope`).
 #[derive(Clone, Copy)]
 pub struct TaskContext<'a> {
     pub(crate) name: &'a str,
@@ -29,19 +29,19 @@ impl std::fmt::Debug for TaskContext<'_> {
 }
 
 impl<'a> TaskContext<'a> {
-    /// Имя задачи.
+    /// The task name.
     #[must_use]
     pub fn name(&self) -> &'a str {
         self.name
     }
 
-    /// Пул, на котором исполняется граф: для вложенного параллелизма.
+    /// The pool the graph runs on, for nested parallelism.
     #[must_use]
     pub fn pool(&self) -> &'a ThreadPool {
         self.pool
     }
 
-    /// Ресурс на чтение (объявлен через `reads` или `writes`).
+    /// A resource for reading (declared via `reads` or `writes`).
     pub fn read<T: 'static>(&self) -> Result<Res<'a, T>, GraphError> {
         self.check::<T>(false)?;
         self.resources
@@ -49,7 +49,7 @@ impl<'a> TaskContext<'a> {
             .map_err(|b| self.borrow_error::<T>(b))
     }
 
-    /// Ресурс на запись (объявлен через `writes`).
+    /// A resource for writing (declared via `writes`).
     pub fn write<T: 'static>(&self) -> Result<ResMut<'a, T>, GraphError> {
         self.check::<T>(true)?;
         self.resources
@@ -84,14 +84,14 @@ impl<'a> TaskContext<'a> {
     }
 }
 
-/// Что может вернуть задача графа: `()` или `Result<(), E>`.
+/// What a graph task may return: `()` or `Result<(), E>`.
 ///
-/// Ошибка `E` превращается в [`GraphError::TaskFailed`]; если это сама [`GraphError`]
-/// (например, проброшенная через `?` из [`TaskContext::read`]), она возвращается как есть.
+/// An error `E` becomes [`GraphError::TaskFailed`]; if it is a [`GraphError`] itself
+/// (for example propagated with `?` from [`TaskContext::read`]), it is returned as is.
 ///
-/// Трейт запечатан: реализовать его вне крейта нельзя (DECISIONS #42).
+/// The trait is sealed: it cannot be implemented outside the crate (DECISIONS #42).
 pub trait TaskResult: sealed::Sealed {
-    /// Приводит результат задачи `task` к результату графа.
+    /// Converts the result of task `task` into a graph result.
     fn into_result(self, task: &str) -> Result<(), GraphError>;
 }
 

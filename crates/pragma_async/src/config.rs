@@ -1,9 +1,9 @@
 use crate::AsyncError;
 
-/// Верхняя граница blocking-потоков — защита от опечаток в конфиге.
+/// Upper bound on blocking threads, a guard against typos in the config.
 const MAX_BLOCKING_THREADS: usize = 256;
 
-/// Конфигурация исполнителя: размер blocking-пула и его очереди.
+/// Executor configuration: the size of the blocking pool and its queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsyncConfig {
     blocking_threads: usize,
@@ -13,7 +13,7 @@ pub struct AsyncConfig {
 }
 
 impl Default for AsyncConfig {
-    /// 4 blocking-потока (создаются по требованию), до 1024 поставленных blocking-задач.
+    /// 4 blocking threads (created on demand), up to 1024 queued blocking tasks.
     fn default() -> Self {
         Self {
             blocking_threads: 4,
@@ -25,62 +25,62 @@ impl Default for AsyncConfig {
 }
 
 impl AsyncConfig {
-    /// Максимум потоков blocking-пула. Потоки создаются по требованию и живут до сброса
-    /// исполнителя.
+    /// Maximum number of blocking pool threads. Threads are created on demand and live until the
+    /// executor is dropped.
     #[must_use]
     pub fn with_blocking_threads(mut self, threads: usize) -> Self {
         self.blocking_threads = threads;
         self
     }
 
-    /// Сколько blocking-задач может быть поставлено одновременно (в очереди и в работе).
-    /// Сверх лимита [`Executor::unblock`](crate::Executor::unblock) сразу возвращает
-    /// [`AsyncError::Overloaded`] — очередь не растёт без границы, вызывающий не ждёт.
+    /// How many blocking tasks may be queued at once (waiting and running).
+    /// Beyond the limit, [`Executor::unblock`](crate::Executor::unblock) immediately returns
+    /// [`AsyncError::Overloaded`]: the queue does not grow without bound, and the caller does not wait.
     #[must_use]
     pub fn with_blocking_capacity(mut self, capacity: usize) -> Self {
         self.blocking_capacity = capacity;
         self
     }
 
-    /// Префикс имени blocking-потоков: `<prefix>-<index>`.
+    /// Blocking thread name prefix: `<prefix>-<index>`.
     #[must_use]
     pub fn with_name_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.name_prefix = prefix.into();
         self
     }
 
-    /// Размер стека blocking-потока в байтах (`None` — по умолчанию ОС).
+    /// Blocking thread stack size in bytes (`None`: the OS default).
     #[must_use]
     pub fn with_stack_size(mut self, bytes: Option<usize>) -> Self {
         self.stack_size = bytes;
         self
     }
 
-    /// Максимум потоков blocking-пула.
+    /// Maximum number of blocking pool threads.
     #[must_use]
     pub fn blocking_threads(&self) -> usize {
         self.blocking_threads
     }
 
-    /// Лимит поставленных blocking-задач.
+    /// The limit on queued blocking tasks.
     #[must_use]
     pub fn blocking_capacity(&self) -> usize {
         self.blocking_capacity
     }
 
-    /// Префикс имени blocking-потоков.
+    /// Blocking thread name prefix.
     #[must_use]
     pub fn name_prefix(&self) -> &str {
         &self.name_prefix
     }
 
-    /// Размер стека blocking-потока.
+    /// Blocking thread stack size.
     #[must_use]
     pub fn stack_size(&self) -> Option<usize> {
         self.stack_size
     }
 
-    /// Проверяет конфигурацию.
+    /// Validates the configuration.
     pub fn validate(self) -> Result<Self, AsyncError> {
         if self.blocking_threads == 0 {
             return Err(AsyncError::InvalidConfig {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-/// Считает сбросы помеченных значений: утечка future видна как недосчёт.
+/// Counts drops of marked values: a leaked future shows up as a shortfall.
 #[derive(Clone, Default)]
 pub struct DropCounter(Arc<AtomicUsize>);
 
@@ -26,7 +26,7 @@ impl Drop for DropToken {
     }
 }
 
-/// Ждёт условия; по таймауту падает (вместо зависшего теста).
+/// Waits for a condition; fails on timeout (instead of a hung test).
 pub fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !cond() {
