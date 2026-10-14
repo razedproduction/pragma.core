@@ -196,7 +196,7 @@ M5b (память и `unsafe`):
 | Счётчик `unsafe` | ✅ 52 вхождения в 7 файлах (`+7` — тестовый аллокатор `oom.rs`, DECISIONS #37); рост без записи DECISIONS роняет аудит |
 | Nightly fuzz / soak | ✅ fuzz 30 мин с корпусом, soak ×5 с seed по номеру запуска, набор на 3000 тиков |
 | `TooLarge` / `OutOfMemory` вместо `abort` | ✅ юнит-тесты лимитов, proptest `large_graphs_are_too_large_not_abort`, fuzz-префикс `0xFE` (в корпусе), `tests/oom.rs` с отказывающим аллокатором |
-| Miri `pragma_jobs` (1 воркер) | ✅ 8 тестов под Tree Borrows; под Stacked Borrows — ❌ в `crossbeam-epoch`, не в нашем коде (DECISIONS #38) |
+| Miri `pragma_jobs` (1 воркер) | ✅ 8 тестов под Tree Borrows; под Stacked Borrows — ❌ в `crossbeam-epoch`, не в нашем коде (DECISIONS #38; перепроверено 2026-10-14 на последней `crossbeam-epoch` 0.9.21 и nightly 1.101 — то же место, `Local::element_of`) |
 | Ревью `unsafe` | ✅ `docs/unsafe.md`: 52 вхождения, ошибок нет, 2 замечания без изменения кода |
 
 ## M6 — v1.0
