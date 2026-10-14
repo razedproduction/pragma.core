@@ -74,11 +74,15 @@ fn hung_task_is_reported_once() {
     assert!(warnings().is_empty(), "{:?}", warnings());
 
     // «Зависшая» задача: в 8 раз дольше порога, но предупреждение одно.
-    pool.spawn_named("stuck-asset-decode", Priority::Normal, || {
+    // Ждём без `join`: тот помогает исполнять задачи и мог бы сам взять эту задачу на главный
+    // поток (тогда предупреждение пришло бы от `external-0`, а не от воркера).
+    let stuck = pool.spawn_named("stuck-asset-decode", Priority::Normal, || {
         std::thread::sleep(Duration::from_millis(400));
-    })
-    .join()
-    .unwrap();
+    });
+    while !stuck.is_finished() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stuck.join().unwrap();
     std::thread::sleep(Duration::from_millis(100));
     drop(pool);
 
