@@ -7,16 +7,20 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Soak: стресс-тесты в 5 раз длиннее, seed случайных паник/отмен меняется каждую ночь
+  # (печатается в логе для воспроизведения).
+  PRAGMA_SOAK_ROUNDS: "5"
+  PRAGMA_SOAK_SEED: ${{ github.run_number }}
 
 jobs:
   stress:
-    name: Stress (${{ matrix.os }})
+    name: Stress / soak (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - run: rustup show # installs the toolchain pinned in rust-toolchain.toml
@@ -25,3 +29,34 @@ jobs:
       - run: cargo test -p pragma_jobs --release --test stress -- --ignored
       # Async: 200k задач со случайной отменой, паниками и blocking-вызовами, 1..2N воркеров.
       - run: cargo test -p pragma_async --release --test prop -- --ignored
+      # frame_sim на много тиков: весь набор детерминизма, 3000 тиков на прогон.
+      - run: cargo run -p frame_sim --release -- --suite --ticks 3000
+
+  fuzz:
+    name: fuzz (graph build, 30 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # Корпус переживает ночи: восстанавливаем последний и сохраняем пополненный под новым
+      # ключом (кэш неизменяем).
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/graph_build
+          key: fuzz-corpus-graph_build-${{ github.run_id }}
+          restore-keys: fuzz-corpus-graph_build-
+      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu graph_build -- -max_total_time=1800
+        env:
+          RUSTFLAGS: ""
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

@@ -41,6 +41,16 @@ pub enum GraphError {
         /// Повторяющееся имя.
         task: String,
     },
+    /// Граф не помещается в лимиты сборки ([`MAX_TASKS`](crate::MAX_TASKS),
+    /// [`MAX_EDGES`](crate::MAX_EDGES)) или память для плана не выделилась — вместо `abort`
+    /// на большом входе.
+    #[error("frame graph with {tasks} tasks is too large: {reason}")]
+    TooLarge {
+        /// Число задач в описании.
+        tasks: usize,
+        /// Какой лимит превышен (или нехватка памяти).
+        reason: &'static str,
+    },
     /// Задача объявила ресурс, которого нет в [`Resources`](crate::Resources).
     #[error("task `{task}` needs resource `{resource}`, which is missing")]
     MissingResource {

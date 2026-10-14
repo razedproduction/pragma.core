@@ -13,7 +13,7 @@
 | M2 | 0.2.0 | Граф кадра | ✅ |
 | M3 | 0.3.0 | Async-задачи и вертикальный срез `frame_sim` | ✅ |
 | M4 | 0.4.0 | Наблюдаемость и тюнинг | ✅ |
-| M5 | 0.5.0 | Укрепление: детерминизм, fuzz, бенч-гейт, semver | 📋 |
+| M5 | 0.5.0 | Укрепление: детерминизм, fuzz, бенч-гейт, semver | 🚧 (M5a — PR #8, M5b — PR #9) |
 | M6 | 1.0.0 | Стабильный API, публикация | 📋 |
 
 ---
@@ -162,16 +162,42 @@ M4b (тюнинг):
 
 ## M5 — Укрепление: «профи»-гарантии (0.5.0)
 
-- [ ] Детерминизм-тест обязателен в CI (1/2/N воркеров, несколько сценариев)
-- [ ] Бенч-гейт: регрессия > 10% роняет CI (сравнение с `main`)
-- [ ] `cargo-semver-checks` в CI
-- [ ] Nightly-fuzz и soak-тесты по расписанию
-- [ ] Miri для тестов `pragma_jobs` в однопоточной конфигурации
-- [ ] Ревью всего `unsafe` в `pragma_sync`, счётчик unsafe-блоков в CI
-- [ ] Память в `build()` графа ограничена: `closure` в `plan.rs` занимает n²/8 байт (100k задач ≈ 1.25 ГБ) —
-      лимит числа задач и `try_reserve` → `GraphError::TooLarge`; fuzz-кейс на большое n
-- [ ] `HandlePool::insert`: рост `slots` через `try_reserve` → `BaseError::OutOfMemory` вместо `abort`
-- [ ] Правило в `reliability.md`: выделение, размер которого задаёт вход, — только через `try_reserve` или под лимитом
+M5a (гарантии в CI):
+- [x] Детерминизм-тест обязателен в CI (1/2/N воркеров, несколько сценариев): `frame_sim --suite`
+      + `tests/suite.rs`, наблюдаемость не меняет хеш (DECISIONS #35)
+- [x] Бенч-гейт: регрессия > 10% роняет CI (сравнение с `main`): `tools/bench_gate.py`, A/B на одном
+      раннере (DECISIONS #34)
+- [x] `cargo-semver-checks` в CI, baseline — `main` (DECISIONS #33)
+- [x] Nightly-fuzz (30 мин, корпус сохраняется) и soak-тесты по расписанию
+- [x] Счётчик unsafe-блоков в CI: `[unsafe_budget]` в `layers.toml` (DECISIONS #36)
+
+M5b (память и `unsafe`):
+- [x] Miri для тестов `pragma_jobs` в однопоточной конфигурации: `tests/miri.rs`, Tree Borrows (DECISIONS #38)
+- [x] Ревью всего `unsafe` в `pragma_sync`, `pragma_sys` и тестовых аллокаторах — [`docs/unsafe.md`](unsafe.md)
+- [x] Память в `build()` графа ограничена: `closure` в `plan.rs` занимал n²/8 байт (100k задач ≈ 1.25 ГБ) —
+      `MAX_TASKS` = 16 384, `MAX_EDGES` = 2²², `try_reserve` → `GraphError::TooLarge`; fuzz-кейс и proptest на большое n
+- [x] `HandlePool::insert`: рост `slots` (и списка свободных) через `try_reserve` → `BaseError::OutOfMemory` вместо `abort`
+- [x] Правило в `reliability.md`: выделение, размер которого задаёт вход, — только через `try_reserve` или под лимитом (DECISIONS #37)
+- [x] Версия всех крейтов — 0.5.0 (DECISIONS #33)
+
+**Готово, когда:** детерминизм-набор, бенч-гейт, semver-checks и счётчик `unsafe` зелёные в CI на
+обеих ОС, nightly fuzz/soak идут по расписанию; на больших входах — ошибки вместо `abort`; Miri для
+`pragma_jobs` зелёный; ревью `unsafe` оформлено.
+
+**Состояние критериев** (Windows, AMD FX-8350, 8 логических ядер; CI — GitHub-раннеры Windows и Linux):
+
+| Критерий | Состояние |
+|---|---|
+| Набор детерминизма в CI на обеих ОС | ✅ `frame_sim --suite --ticks 200`: 5 сценариев, 60 прогонов, хеш совпал (локально 20 с); debug-вариант `tests/suite.rs` с watchdog 1 мс и подписчиком `tracing`; CI PR #8 |
+| Наблюдаемость не меняет хеш (обещание M4) | ✅ `idle_spin` 0/128, `PoolStats` каждый кадр, watchdog выкл./1 мс, подписчик `tracing` — в наборе |
+| Бенч-гейт | ✅ A/B на одном раннере, 3 круга; локально (1 круг) — всё в пределах, шум эталонов 9.6%; шум раннеров GitHub — `docs/perf.md` §6 |
+| Запас fib(20) ≤ 2× rayon | ⚠️ отслеживается в summary гейта: локально 1.98× (запас ~1%) |
+| semver-checks | ✅ baseline `main`; содержателен с 0.5.0 (на 0.0.x инструмент пропускает все проверки — DECISIONS #33) |
+| Счётчик `unsafe` | ✅ 52 вхождения в 7 файлах (`+7` — тестовый аллокатор `oom.rs`, DECISIONS #37); рост без записи DECISIONS роняет аудит |
+| Nightly fuzz / soak | ✅ fuzz 30 мин с корпусом, soak ×5 с seed по номеру запуска, набор на 3000 тиков |
+| `TooLarge` / `OutOfMemory` вместо `abort` | ✅ юнит-тесты лимитов, proptest `large_graphs_are_too_large_not_abort`, fuzz-префикс `0xFE` (в корпусе), `tests/oom.rs` с отказывающим аллокатором |
+| Miri `pragma_jobs` (1 воркер) | ✅ 8 тестов под Tree Borrows; под Stacked Borrows — ❌ в `crossbeam-epoch`, не в нашем коде (DECISIONS #38) |
+| Ревью `unsafe` | ✅ `docs/unsafe.md`: 52 вхождения, ошибок нет, 2 замечания без изменения кода |
 
 ## M6 — v1.0
 

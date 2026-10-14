@@ -331,10 +331,11 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "frame_sim"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "pragma_core",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -635,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_async"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "async-task",
  "criterion",
@@ -648,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_base"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "proptest",
  "thiserror",
@@ -657,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_core"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "pragma_async",
  "pragma_base",
@@ -669,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_graph"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "pragma_base",
@@ -682,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_jobs"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "crossbeam-deque",
@@ -697,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_sync"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "crossbeam-utils",
  "loom",
@@ -706,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_sys"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "libc",
  "thiserror",

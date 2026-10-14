@@ -67,4 +67,5 @@ mod resources;
 pub use context::{TaskContext, TaskResult};
 pub use error::GraphError;
 pub use graph::{FrameGraph, FrameGraphBuilder, TaskConfig};
+pub use plan::{MAX_EDGES, MAX_TASKS};
 pub use resources::{Res, ResMut, Resources};

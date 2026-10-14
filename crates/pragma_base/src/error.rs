@@ -13,6 +13,12 @@ pub enum BaseError {
     /// Пул исчерпал адресное пространство индексов (`u32::MAX` слотов).
     #[error("handle pool capacity exhausted")]
     CapacityExhausted,
+    /// Аллокатор не дал памяти под новый слот пула (вместо `abort`).
+    #[error("out of memory growing handle pool beyond {slots} slots")]
+    OutOfMemory {
+        /// Число слотов пула на момент отказа.
+        slots: usize,
+    },
     /// Счётчик тиков переполнился.
     #[error("tick counter overflow")]
     TickOverflow,

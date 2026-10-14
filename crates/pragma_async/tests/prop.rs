@@ -133,7 +133,18 @@ proptest! {
 #[test]
 #[ignore = "long stress; run in nightly CI"]
 fn stress_many_tasks_random_cancel_and_panics() {
-    let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+    // Soak в ночном CI: `PRAGMA_SOAK_ROUNDS` удлиняет прогон, `PRAGMA_SOAK_SEED` меняет поток.
+    let env = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok());
+    let soak_rounds = usize::try_from(env("PRAGMA_SOAK_ROUNDS").unwrap_or(1).max(1)).unwrap();
+    let seed = env("PRAGMA_SOAK_SEED").unwrap_or(0);
+    if seed != 0 {
+        eprintln!("PRAGMA_SOAK_SEED={seed}");
+    }
+    // xorshift не выходит из нуля, поэтому seed подмешивается в ненулевую константу.
+    let mut x: u64 = 0x2545_F491_4F6C_DD1D ^ seed;
+    if x == 0 {
+        x = 0x2545_F491_4F6C_DD1D;
+    }
     let mut next = move || {
         x ^= x << 13;
         x ^= x >> 7;
@@ -141,7 +152,7 @@ fn stress_many_tasks_random_cancel_and_panics() {
         x
     };
     let cores = std::thread::available_parallelism().map_or(2, usize::from);
-    for round in 0..40_usize {
+    for round in 0..40 * soak_rounds {
         let workers = 1 + round % (2 * cores);
         let specs: Vec<Spec> = (0..5_000)
             .map(|_| {
