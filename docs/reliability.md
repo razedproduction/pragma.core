@@ -136,6 +136,10 @@ workers gives the same hash.
 14. The `tools/bench_gate.py` bench gate (PR, Windows + Linux): an A/B against `main`; a regression > 10%
     beyond the reference noise fails the PR; the methodology is in [perf.md §6](perf.md#6-bench-gate-in-ci)
 
+A PR that changes only Markdown files and `docs/` skips Miri (step 8; loom still runs), fuzzing,
+semver-checks and the bench gate (steps 10, 13, 14; the `changes` job, DECISIONS #45); everything else,
+including `cargo doc` and doctests, still runs. Pushes to `main` run all steps.
+
 Nightly ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)), Windows and Linux:
 soak, i.e. the `pragma_jobs` and `pragma_async` stress tests (`--ignored`) 5 times longer with a new seed
 every night (`PRAGMA_SOAK_ROUNDS`, `PRAGMA_SOAK_SEED`), and the determinism suite over 3000 ticks;
