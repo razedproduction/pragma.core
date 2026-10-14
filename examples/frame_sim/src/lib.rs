@@ -34,7 +34,9 @@
 use std::time::{Duration, Instant};
 
 use pragma_core::graph::{FrameGraph, GraphError, Resources, TaskContext};
-use pragma_core::jobs::{Grain, JobError, JobsError, PoolConfig, ThreadPool};
+use pragma_core::jobs::{
+    DEFAULT_IDLE_SPIN, DEFAULT_WATCHDOG, Grain, JobError, JobsError, PoolConfig, ThreadPool,
+};
 use pragma_core::tasks::{AsyncConfig, AsyncError, AsyncHandle, Executor};
 
 /// Сторона квадратного мира.
@@ -97,6 +99,12 @@ pub struct SimConfig {
     pub load_latency: Duration,
     /// Seed начального состояния и карты.
     pub seed: u64,
+    /// Раундов `yield` перед парковкой воркера ([`PoolConfig::with_idle_spin`]).
+    pub idle_spin: u32,
+    /// Порог watchdog ([`PoolConfig::with_watchdog`]; действует только в debug-сборке).
+    pub watchdog: Option<Duration>,
+    /// Снимать [`PoolStats`](pragma_core::jobs::PoolStats) после каждого кадра.
+    pub sample_stats: bool,
 }
 
 impl Default for SimConfig {
@@ -108,6 +116,9 @@ impl Default for SimConfig {
             load_apply_tick: 60,
             load_latency: Duration::ZERO,
             seed: 0x5EED_CAFE,
+            idle_spin: DEFAULT_IDLE_SPIN,
+            watchdog: Some(DEFAULT_WATCHDOG),
+            sample_stats: false,
         }
     }
 }
@@ -124,6 +135,9 @@ pub struct SimReport {
     pub load_waited: bool,
     /// Время прогона.
     pub elapsed: Duration,
+    /// Задач пула по последнему снимку `PoolStats` (только при `sample_stats`; в хеш не
+    /// входит).
+    pub stats_executed: Option<u64>,
 }
 
 impl SimReport {
@@ -552,7 +566,12 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
         return Err(SimError::Config("ticks must be >= 1"));
     }
     let started = Instant::now();
-    let pool = ThreadPool::new(PoolConfig::default().with_workers(config.workers))?;
+    let pool = ThreadPool::new(
+        PoolConfig::default()
+            .with_workers(config.workers)
+            .with_idle_spin(config.idle_spin)
+            .with_watchdog(config.watchdog),
+    )?;
     let exec = Executor::new(&pool, AsyncConfig::default().with_blocking_threads(1))?;
     let mut graph = build_graph()?;
     let mut resources = initial_resources(config);
@@ -561,6 +580,7 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
     let mut staged: Option<Terrain> = None;
     let mut load_ready_tick = None;
     let mut load_waited = false;
+    let mut stats_executed = None;
     let mut hashes = Vec::with_capacity(usize::try_from(config.ticks).unwrap_or(0));
 
     for tick in 0..config.ticks {
@@ -593,6 +613,9 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
             .map(|h| h.0)
             .ok_or(SimError::Missing("StateHash"))?;
         hashes.push(hash);
+        if config.sample_stats {
+            stats_executed = Some(pool.stats().executed());
+        }
     }
     // Незабранная загрузка (тик применения за пределами прогона) отменяется сбросом хэндла.
     drop(loading);
@@ -601,5 +624,204 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
         load_ready_tick,
         load_waited,
         elapsed: started.elapsed(),
+        stats_executed,
     })
+}
+
+/// Один прогон набора детерминизма.
+#[derive(Debug, Clone)]
+pub struct SuiteRun {
+    /// Метка для отчёта.
+    pub label: String,
+    /// Конфигурация прогона.
+    pub config: SimConfig,
+    /// Прогон с подписчиком `tracing`: такие прогоны исполняются после остальных, когда
+    /// глобальный подписчик уже установлен.
+    pub traced: bool,
+}
+
+/// Сценарий набора: все прогоны обязаны дать одинаковый хеш на каждом тике.
+#[derive(Debug, Clone)]
+pub struct Scenario {
+    /// Имя сценария.
+    pub name: &'static str,
+    /// Прогоны; первый — эталон.
+    pub runs: Vec<SuiteRun>,
+}
+
+/// Обязательный набор детерминизма (веха M5).
+///
+/// Сценарии различаются seed, числом сущностей (включая пустой мир и нечётное число) и тиком
+/// применения загрузки (раньше готовности, на первом тике, за пределами прогона). Каждый
+/// сценарий прогоняется на каждом числе воркеров из `workers` с мгновенной и запаздывающей
+/// (`slow_load`) загрузкой, а на наибольшем числе воркеров — ещё и с вариантами окружения,
+/// которые не должны влиять на хеш: `idle_spin` 0 и 128, снимки `PoolStats` после каждого
+/// кадра, watchdog выключен и с порогом 1 мс (в debug-сборке срабатывает), подписчик
+/// `tracing` (`traced`). Число сущностей ограничено `max_entities`, чтобы тот же набор
+/// годился для debug-теста.
+#[must_use]
+pub fn determinism_suite(
+    ticks: u64,
+    max_entities: usize,
+    workers: &[usize],
+    slow_load: Duration,
+) -> Vec<Scenario> {
+    struct Shape {
+        name: &'static str,
+        entities: usize,
+        seed: u64,
+        apply: u64,
+    }
+    let shapes = [
+        Shape {
+            name: "default",
+            entities: 100_000,
+            seed: 0x5EED_CAFE,
+            apply: 60,
+        },
+        Shape {
+            name: "odd-count",
+            entities: 33_333,
+            seed: 7,
+            apply: ticks / 2,
+        },
+        Shape {
+            name: "apply-at-start",
+            entities: 20_000,
+            seed: 0x1234_5678_9ABC_DEF0,
+            apply: 0,
+        },
+        Shape {
+            name: "never-applied",
+            entities: 50_000,
+            seed: 42,
+            apply: u64::MAX,
+        },
+        Shape {
+            name: "empty-world",
+            entities: 0,
+            seed: 1,
+            apply: 1,
+        },
+    ];
+    let widest = workers.iter().copied().max().unwrap_or(1);
+    shapes
+        .iter()
+        .map(|shape| {
+            let base = SimConfig {
+                entities: shape.entities.min(max_entities),
+                ticks,
+                load_apply_tick: shape.apply,
+                seed: shape.seed,
+                ..SimConfig::default()
+            };
+            let mut runs = Vec::new();
+            for &w in workers {
+                for latency in [Duration::ZERO, slow_load] {
+                    runs.push(SuiteRun {
+                        label: format!("workers={w} latency={}ms", latency.as_millis()),
+                        config: SimConfig {
+                            workers: w,
+                            load_latency: latency,
+                            ..base.clone()
+                        },
+                        traced: false,
+                    });
+                }
+            }
+            let wide = SimConfig {
+                workers: widest,
+                ..base
+            };
+            let variants = [
+                (
+                    "idle_spin=0",
+                    false,
+                    SimConfig {
+                        idle_spin: 0,
+                        ..wide.clone()
+                    },
+                ),
+                (
+                    "idle_spin=128",
+                    false,
+                    SimConfig {
+                        idle_spin: 128,
+                        ..wide.clone()
+                    },
+                ),
+                (
+                    "pool-stats",
+                    false,
+                    SimConfig {
+                        sample_stats: true,
+                        ..wide.clone()
+                    },
+                ),
+                (
+                    "watchdog=off",
+                    false,
+                    SimConfig {
+                        watchdog: None,
+                        ..wide.clone()
+                    },
+                ),
+                (
+                    "watchdog=1ms",
+                    false,
+                    SimConfig {
+                        watchdog: Some(Duration::from_millis(1)),
+                        ..wide.clone()
+                    },
+                ),
+                (
+                    "tracing",
+                    true,
+                    SimConfig {
+                        load_latency: slow_load,
+                        ..wide
+                    },
+                ),
+            ];
+            runs.extend(variants.into_iter().map(|(name, traced, config)| SuiteRun {
+                label: format!("workers={widest} {name}"),
+                config,
+                traced,
+            }));
+            Scenario {
+                name: shape.name,
+                runs,
+            }
+        })
+        .collect()
+}
+
+/// Итог проверки сценария.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Хеши всех тиков совпали с эталоном.
+    Match,
+    /// Расхождение на тике `tick` (или разное число тиков — `tick` = длина короче).
+    Diverged {
+        /// Первый тик с другим хешем.
+        tick: usize,
+    },
+}
+
+/// Сравнивает хеши прогона с эталоном.
+#[must_use]
+pub fn compare(reference: &[u64], hashes: &[u64]) -> Verdict {
+    match reference.iter().zip(hashes).position(|(a, b)| a != b) {
+        Some(tick) => Verdict::Diverged { tick },
+        None if reference.len() != hashes.len() => Verdict::Diverged {
+            tick: reference.len().min(hashes.len()),
+        },
+        None => Verdict::Match,
+    }
+}
+
+/// Число воркеров без переподписки: логические ядра минус главный поток (минимум 1).
+#[must_use]
+pub fn default_workers() -> usize {
+    PoolConfig::default().workers()
 }

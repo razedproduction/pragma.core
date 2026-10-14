@@ -19,6 +19,27 @@ fn worker_counts() -> Vec<usize> {
     counts
 }
 
+/// Множитель длины soak-прогона (`PRAGMA_SOAK_ROUNDS`, ночной CI); по умолчанию 1.
+fn soak_rounds() -> u64 {
+    std::env::var("PRAGMA_SOAK_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// Seed случайных паник (`PRAGMA_SOAK_SEED`): ночной CI меняет его каждую ночь.
+fn soak_seed() -> u64 {
+    let seed = std::env::var("PRAGMA_SOAK_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if seed != 0 {
+        eprintln!("PRAGMA_SOAK_SEED={seed}");
+    }
+    seed
+}
+
 /// Дешёвый детерминированный генератор, чтобы паники были «случайными», но воспроизводимыми.
 fn hash(mut x: u64) -> u64 {
     x ^= x >> 33;
@@ -34,23 +55,25 @@ fn ten_million_tiny_tasks() {
     const PER_SCOPE: u64 = 10_000;
     for workers in worker_counts() {
         let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
-        let sum = AtomicU64::new(0);
-        for batch in 0..TASKS / PER_SCOPE {
-            pool.scope(|s| {
-                for i in 0..PER_SCOPE {
-                    let sum = &sum;
-                    s.spawn(move || {
-                        sum.fetch_add(batch * PER_SCOPE + i, Ordering::Relaxed);
-                    });
-                }
-            })
-            .unwrap();
+        for _ in 0..soak_rounds() {
+            let sum = AtomicU64::new(0);
+            for batch in 0..TASKS / PER_SCOPE {
+                pool.scope(|s| {
+                    for i in 0..PER_SCOPE {
+                        let sum = &sum;
+                        s.spawn(move || {
+                            sum.fetch_add(batch * PER_SCOPE + i, Ordering::Relaxed);
+                        });
+                    }
+                })
+                .unwrap();
+            }
+            assert_eq!(
+                sum.load(Ordering::Relaxed),
+                TASKS * (TASKS - 1) / 2,
+                "workers={workers}"
+            );
         }
-        assert_eq!(
-            sum.load(Ordering::Relaxed),
-            TASKS * (TASKS - 1) / 2,
-            "workers={workers}"
-        );
     }
 }
 
@@ -59,16 +82,18 @@ fn ten_million_tiny_tasks() {
 fn random_panics_never_hang_or_kill_workers() {
     // Тысячи ожидаемых паник: не засоряем вывод.
     std::panic::set_hook(Box::new(|_| {}));
+    let rounds = 2_000 * soak_rounds();
+    let seed = soak_seed();
     for workers in worker_counts() {
         let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
         let panics = AtomicUsize::new(0);
         let oks = AtomicUsize::new(0);
-        for round in 0..2_000_u64 {
+        for round in 0..rounds {
             let r = pool.scope(|s| {
                 for i in 0..64_u64 {
                     let pool = &pool;
                     s.spawn(move || {
-                        let h = hash(round * 64 + i);
+                        let h = hash(seed ^ (round * 64 + i));
                         let r = pool.join(
                             || {
                                 assert!(!h.is_multiple_of(7), "left");
@@ -91,7 +116,7 @@ fn random_panics_never_hang_or_kill_workers() {
                 Err(other) => panic!("unexpected {other}"),
             };
             let handle = pool.spawn(Priority::Background, move || {
-                assert!(!hash(round).is_multiple_of(3), "background");
+                assert!(!hash(seed ^ round).is_multiple_of(3), "background");
                 round
             });
             match handle.join() {
@@ -106,7 +131,7 @@ fn random_panics_never_hang_or_kill_workers() {
         assert!(v.iter().all(|&x| x == 2));
         assert_eq!(
             oks.load(Ordering::Relaxed) + panics.load(Ordering::Relaxed),
-            2_000
+            usize::try_from(rounds).unwrap()
         );
     }
 }
@@ -114,8 +139,8 @@ fn random_panics_never_hang_or_kill_workers() {
 #[test]
 #[ignore = "долгий: многократное создание и уничтожение пула"]
 fn create_drop_cycles_do_not_leak_or_hang() {
-    for i in 0..500 {
-        let workers = 1 + i % 8;
+    for i in 0..500 * soak_rounds() {
+        let workers = usize::try_from(1 + i % 8).unwrap();
         let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
         let handles: Vec<_> = (0..32)
             .map(|j| pool.spawn(Priority::Normal, move || j * 2))

@@ -18,6 +18,17 @@ frame_sim = 5     # пример-вертикальный срез (examples/), 
 
 [allow]
 
+# Бюджет `unsafe` (docs/reliability.md §3, docs/unsafe.md): точное число вхождений ключевого
+# слова в коде файла (блоки, `unsafe fn`/`impl`, типы `unsafe fn(..)`) и решения, которые их
+# разрешили. Рост — только с новой записью в DECISIONS.md (CI сверяет с базовой ревизией).
+[unsafe_budget]
+"crates/pragma_sync/src/scope.rs" = { count = 9, decisions = [15] }
+"crates/pragma_sync/src/join.rs" = { count = 9, decisions = [30] }
+"crates/pragma_sync/src/label.rs" = { count = 3, decisions = [28] }
+"crates/pragma_sys/src/windows.rs" = { count = 6, decisions = [27] }
+"crates/pragma_sys/src/linux.rs" = { count = 9, decisions = [27] }
+"crates/pragma_graph/tests/alloc.rs" = { count = 9, decisions = [19] }
+
 # Осознанно принятые исключения из правила «никакого C/C++» (DECISIONS.md #7).
 [purity.accepted]
 generator = "dev-only: loom (cfg(loom)) для модель-чекинга pragma_sync; в дерево пользователей не попадает"

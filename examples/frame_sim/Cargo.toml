@@ -12,6 +12,8 @@ repository.workspace = true
 [dependencies]
 pragma_core = { workspace = true }
 thiserror = { workspace = true }
+# Подписчик для набора детерминизма (`--suite`): уже в графе через pragma_jobs.
+tracing = { workspace = true }
 
 [lints]
 workspace = true

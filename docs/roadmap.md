@@ -162,12 +162,18 @@ M4b (тюнинг):
 
 ## M5 — Укрепление: «профи»-гарантии (0.5.0)
 
-- [ ] Детерминизм-тест обязателен в CI (1/2/N воркеров, несколько сценариев)
-- [ ] Бенч-гейт: регрессия > 10% роняет CI (сравнение с `main`)
-- [ ] `cargo-semver-checks` в CI
-- [ ] Nightly-fuzz и soak-тесты по расписанию
+M5a (гарантии в CI):
+- [x] Детерминизм-тест обязателен в CI (1/2/N воркеров, несколько сценариев): `frame_sim --suite`
+      + `tests/suite.rs`, наблюдаемость не меняет хеш (DECISIONS #35)
+- [x] Бенч-гейт: регрессия > 10% роняет CI (сравнение с `main`): `tools/bench_gate.py`, A/B на одном
+      раннере (DECISIONS #34)
+- [x] `cargo-semver-checks` в CI, baseline — `main` (DECISIONS #33)
+- [x] Nightly-fuzz (30 мин, корпус сохраняется) и soak-тесты по расписанию
+- [x] Счётчик unsafe-блоков в CI: `[unsafe_budget]` в `layers.toml` (DECISIONS #36)
+
+M5b (память и `unsafe`):
 - [ ] Miri для тестов `pragma_jobs` в однопоточной конфигурации
-- [ ] Ревью всего `unsafe` в `pragma_sync`, счётчик unsafe-блоков в CI
+- [ ] Ревью всего `unsafe` в `pragma_sync` и `pragma_sys`
 - [ ] Память в `build()` графа ограничена: `closure` в `plan.rs` занимает n²/8 байт (100k задач ≈ 1.25 ГБ) —
       лимит числа задач и `try_reserve` → `GraphError::TooLarge`; fuzz-кейс на большое n
 - [ ] `HandlePool::insert`: рост `slots` через `try_reserve` → `BaseError::OutOfMemory` вместо `abort`

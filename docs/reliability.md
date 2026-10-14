@@ -38,6 +38,10 @@
   строятся на RMW-операциях, а не на «Dekker через SeqCst-load» (см. `AtomicCounter`).
 - Новый `unsafe` вне `pragma_sync` — только через запись в `DECISIONS.md`. Единственное
   исключение — считающий аллокатор в тесте `pragma_graph/tests/alloc.rs` (DECISIONS #19).
+- **Счётчик `unsafe`** (DECISIONS #36): `[unsafe_budget]` в `layers.toml` — точное число
+  вхождений ключевого слова по каждому файлу и решения, которые его разрешили. Аудит
+  (`tools/audit_workspace.py`) падает при любом расхождении, а в PR рост бюджета файла без
+  нового номера решения сверяется с базовой ревизией и роняет CI.
 
 ## 4. Деградация вместо падения
 
@@ -93,8 +97,10 @@
 | Стресс / soak | Длительные тесты `#[ignore]` | Миллионы задач, вложенные `join`, случайные паники; async-задачи со случайной отменой (M3) | M1 |
 | Fuzz | `cargo-fuzz` (`fuzz/`, отдельный workspace) | Построитель графа на произвольных описаниях; тот же оракул — в proptest | M2 |
 | Аллокации | Считающий глобальный аллокатор (`pragma_graph/tests/alloc.rs`) | Кадр графа без аллокаций (с M4 — и с подписчиком `tracing`, и чтение метки из panic hook) | M2 |
-| Детерминизм | Хеш состояния (`examples/frame_sim --verify`) | 1/N воркеров, мгновенная и запаздывающая фоновая загрузка | M3; обязательный набор сценариев — M5 |
-| Производительность | `criterion` | spawn/join, `parallel_for`, граф; сравнение с `rayon` | M1; гейт регрессии с M5 |
+| Детерминизм | Хеш состояния (`frame_sim --suite`, `frame_sim/tests/suite.rs`) | 5 сценариев × 1/2/N воркеров × мгновенная/запаздывающая загрузка; `idle_spin`, `PoolStats`, watchdog, подписчик `tracing` не меняют хеш (DECISIONS #35) | M3; обязательный набор — M5 |
+| Производительность | `criterion` + `tools/bench_gate.py` | spawn/join, `parallel_for`, граф, `frame_sim` мс/тик; сравнение с `rayon`; A/B-гейт против `main` (DECISIONS #34) | M1; гейт регрессии с M5 |
+| API | `cargo-semver-checks` | Ломающее изменение без подъёма версии (baseline — `main`, DECISIONS #33) | M5 |
+| Бюджет `unsafe` | `tools/audit_workspace.py` | Точное число `unsafe` по файлам, рост — только с записью в DECISIONS (#36) | M5 |
 
 ## 7. CI
 
@@ -106,18 +112,22 @@
 4. `cargo doc` без предупреждений
 5. MSRV 1.88
 6. `cargo deny check`: лицензии, advisories, запрещённые C-крейты
-7. `tools/audit_workspace.py`: чистота и слои
+7. `tools/audit_workspace.py`: чистота, слои и бюджет `unsafe` (в PR — против базовой ревизии)
 8. Miri и loom для `pragma_sync`
 9. `cargo hack clippy --each-feature`: каждая фича фасада собирается отдельно
 10. Fuzz построителя графа, 60 с (`cargo +nightly fuzz run graph_build`, Linux)
-11. Вертикальный срез: `cargo run -p frame_sim --release -- --ticks 300 --verify 1,4` (Windows + Linux)
+11. Набор детерминизма: `cargo run -p frame_sim --release -- --suite --ticks 200` (Windows + Linux;
+    debug-вариант — `frame_sim/tests/suite.rs` в шаге 3)
 12. Watchdog в release не срабатывает: `cargo test -p pragma_jobs --release --test watchdog` (Windows + Linux)
+13. `cargo semver-checks --workspace --baseline-rev <base>` (PR, Windows + Linux)
+14. Бенч-гейт `tools/bench_gate.py` (PR, Windows + Linux): A/B против `main`, регрессия > 10%
+    сверх шума эталона роняет PR; методика — [perf.md §6](perf.md#6-бенч-гейт-в-ci)
 
-Ночью ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)): стресс-тесты
-`pragma_jobs` (`--ignored`) на Windows и Linux.
-
-Добавляется по вехам: бенч-гейт и `cargo-semver-checks` (M5), долгий nightly-fuzz по
-расписанию (M5).
+Ночью ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)), Windows и Linux:
+soak — стресс-тесты `pragma_jobs` и `pragma_async` (`--ignored`) в 5 раз длиннее с новым seed
+каждую ночь (`PRAGMA_SOAK_ROUNDS`, `PRAGMA_SOAK_SEED`), набор детерминизма на 3000 тиков;
+Linux — fuzz построителя графа 30 минут с корпусом, переживающим ночи (`actions/cache`), находки —
+артефактом.
 
 ## 8. Стабильность API
 

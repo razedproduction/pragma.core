@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Added — M5a «Гарантии в CI»
+- Обязательный набор детерминизма: `frame_sim --suite` (5 сценариев × 1/2/N воркеров ×
+  мгновенная/запаздывающая загрузка + `idle_spin` 0/128, снимки `PoolStats`, watchdog, подписчик
+  `tracing`) в CI на Windows и Linux, debug-вариант — `frame_sim/tests/suite.rs` (DECISIONS #35).
+  `SimConfig` получил `idle_spin`, `watchdog`, `sample_stats`; вывод — колонку `ms/tick`.
+- Бенч-гейт `tools/bench_gate.py`: A/B `main` ↔ PR на одном раннере, регрессия > 10% сверх
+  шума эталона роняет PR; запас fib(20) ≤ 2× rayon — в summary (DECISIONS #34).
+- `cargo-semver-checks` в CI с baseline `main` (DECISIONS #33).
+- Счётчик `unsafe`: `[unsafe_budget]` в `layers.toml`, проверка в `tools/audit_workspace.py`;
+  в PR рост бюджета без новой записи DECISIONS роняет CI (DECISIONS #36).
+- Ночной CI: fuzz построителя графа 30 минут с сохранением корпуса, soak — стресс-тесты
+  `pragma_jobs`/`pragma_async` в 5 раз длиннее с новым seed (`PRAGMA_SOAK_ROUNDS`,
+  `PRAGMA_SOAK_SEED`), набор детерминизма на 3000 тиков.
+
 ### Changed — M4b «Тюнинг»
 - `ThreadPool::join` на воркере и во внешнем слоте — вторая ветвь на стеке с латчем
   (`pragma_sync::join_on_stack`, DECISIONS #30): не украденная ветвь исполняется владельцем

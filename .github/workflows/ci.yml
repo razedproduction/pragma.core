@@ -27,9 +27,11 @@ jobs:
       - run: cargo clippy -p pragma_core --no-default-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps --all-features
-      # Вертикальный срез M3: 100k сущностей, 300 тиков; хеш каждого тика совпадает на 1 и
-      # 4 воркерах при мгновенной и при запаздывающей фоновой загрузке.
-      - run: cargo run -p frame_sim --release -- --ticks 300 --verify 1,4
+      # Обязательный набор детерминизма (M5): 5 сценариев (seed, число сущностей, тик
+      # применения загрузки) на 1, 2 и N воркерах (N = ядра раннера − 1, без переподписки),
+      # мгновенная и запаздывающая загрузка, idle_spin, PoolStats, watchdog, подписчик tracing.
+      # Тот же набор в debug (watchdog активен) — тест frame_sim/tests/suite.rs выше.
+      - run: cargo run -p frame_sim --release -- --suite --ticks 200
       # Watchdog есть только в debug: в release тот же тест проверяет, что предупреждений нет.
       - run: cargo test -p pragma_jobs --release --test watchdog
 
@@ -82,15 +84,76 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   audit:
-    name: Purity & layers
+    name: Purity, layers & unsafe budget
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: rustup show
-      - run: python tools/audit_workspace.py .
+      # Счётчик unsafe (layers.toml [unsafe_budget]): в PR рост бюджета сверяется с базовой
+      # ревизией и требует новой записи DECISIONS.md.
+      - name: audit
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git show "${{ github.event.pull_request.base.sha }}:layers.toml" > "$RUNNER_TEMP/base-layers.toml"
+            python tools/audit_workspace.py . "--unsafe-baseline=$RUNNER_TEMP/base-layers.toml"
+          else
+            python tools/audit_workspace.py .
+          fi
+
+  semver:
+    name: semver-checks (${{ matrix.os }})
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      # Baseline — main (DECISIONS #33): ломающее изменение публичного API без подъёма
+      # минорной версии (0.x) роняет PR.
+      - run: cargo semver-checks --workspace --baseline-rev ${{ github.event.pull_request.base.sha }}
+
+  bench:
+    name: bench gate (${{ matrix.os }})
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-gate
+      # A/B вперемешку main ↔ PR на одном раннере (DECISIONS #34, docs/perf.md §6):
+      # регрессия > 10% сверх сдвига эталона (rayon / последовательный код) роняет PR.
+      - name: bench gate
+        shell: bash
+        run: |
+          git worktree add --detach ../bench-base "${{ github.event.pull_request.base.sha }}"
+          python tools/bench_gate.py --base ../bench-base --head . --rounds 3 --summary "$GITHUB_STEP_SUMMARY"
 
   miri:
     name: Miri (pragma_sync)
