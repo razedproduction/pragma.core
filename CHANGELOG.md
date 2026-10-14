@@ -6,8 +6,10 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
 
 ## [1.0.0] — 2026-10-14
 
-The first release on crates.io (DECISIONS #47). The public API is the one reviewed in 0.6.0; from
-now on breaking changes happen only in a major release.
+The first stable release (DECISIONS #47). The public API is the one reviewed in 0.6.0; from now on
+breaking changes happen only in a major release. All crates were already published once on
+crates.io as 0.6.0 (from `main` after M6c, before this release's metadata); 1.0.0 is the
+recommended version.
 
 ### Changed
 
