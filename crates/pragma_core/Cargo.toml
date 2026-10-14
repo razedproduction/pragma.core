@@ -30,3 +30,7 @@ puffin = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+# docs.rs documents every feature, including `puffin` (DECISIONS.md #47).
+[package.metadata.docs.rs]
+all-features = true

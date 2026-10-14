@@ -5,7 +5,7 @@ members = ["crates/*", "examples/*"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.6.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -17,13 +17,13 @@ categories = ["game-development", "concurrency"]
 [workspace.dependencies]
 # Internal crates: exact versions (lockstep), so `pragma_sync::__private` can change in any
 # release together with its users (DECISIONS.md #42).
-pragma_base = { path = "crates/pragma_base", version = "=0.6.0" }
-pragma_sync = { path = "crates/pragma_sync", version = "=0.6.0" }
-pragma_sys = { path = "crates/pragma_sys", version = "=0.6.0" }
-pragma_jobs = { path = "crates/pragma_jobs", version = "=0.6.0" }
-pragma_graph = { path = "crates/pragma_graph", version = "=0.6.0" }
-pragma_async = { path = "crates/pragma_async", version = "=0.6.0" }
-pragma_core = { path = "crates/pragma_core", version = "=0.6.0" }
+pragma_base = { path = "crates/pragma_base", version = "=1.0.0" }
+pragma_sync = { path = "crates/pragma_sync", version = "=1.0.0" }
+pragma_sys = { path = "crates/pragma_sys", version = "=1.0.0" }
+pragma_jobs = { path = "crates/pragma_jobs", version = "=1.0.0" }
+pragma_graph = { path = "crates/pragma_graph", version = "=1.0.0" }
+pragma_async = { path = "crates/pragma_async", version = "=1.0.0" }
+pragma_core = { path = "crates/pragma_core", version = "=1.0.0" }
 
 # External - pure Rust only (see docs/reliability.md, deny.toml).
 crossbeam-deque = "0.8.8"
