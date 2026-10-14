@@ -18,6 +18,8 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # Обычно 2–5 мин; зависший тест должен падать быстро, а не висеть 6 ч по умолчанию.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: rustup show # installs the toolchain pinned in rust-toolchain.toml
