@@ -9,6 +9,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
 - All project documentation is now in English: rustdoc and code comments, test messages,
   `docs/`, `DECISIONS.md`, `CONTRIBUTING.md`, this changelog, CI comments, GitHub templates and the
   output of `tools/*.py` (DECISIONS #43, supersedes #11). No API changes.
+- CI: a PR that changes only Markdown files and `docs/` skips fuzz, Miri, semver-checks and the
+  bench gate (DECISIONS #45). Pushes to `main` still run everything.
 
 ### Added
 
