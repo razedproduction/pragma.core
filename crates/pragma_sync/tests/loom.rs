@@ -9,7 +9,8 @@ use loom::sync::Arc;
 use loom::sync::Mutex;
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use loom::thread;
-use pragma_sync::{ArrivalCounter, AtomicCounter, CountLatch, Parker, StackJob, join_on_stack};
+use pragma_sync::__private::{ArrivalCounter, Parker, StackJob, join_on_stack};
+use pragma_sync::{AtomicCounter, CountLatch};
 
 #[test]
 fn stack_join_owner_never_misses_thief() {

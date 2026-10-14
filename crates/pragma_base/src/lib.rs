@@ -1,5 +1,5 @@
-//! L0-фундамент `pragma.core`: типизированные ошибки, generational-хэндлы,
-//! тики симуляции и логирование.
+//! L0-фундамент `pragma.core`: типизированные ошибки, generational-хэндлы и
+//! тики симуляции.
 //!
 //! Крейт не знает о потоках и не имеет `unsafe` — все верхние слои строятся на нём.
 //!
@@ -25,6 +25,3 @@ mod tick;
 pub use error::BaseError;
 pub use handle::{Handle, HandlePool};
 pub use tick::Tick;
-
-/// Re-export `tracing`, чтобы все крейты логировали через одну версию.
-pub use tracing;

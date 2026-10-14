@@ -4,6 +4,7 @@
 pub enum BaseError {
     /// Хэндл указывает на удалённый слот (поколение не совпадает) или на несуществующий индекс.
     #[error("stale or invalid handle (index {index}, generation {generation})")]
+    #[non_exhaustive]
     StaleHandle {
         /// Индекс слота.
         index: u32,
@@ -15,6 +16,7 @@ pub enum BaseError {
     CapacityExhausted,
     /// Аллокатор не дал памяти под новый слот пула (вместо `abort`).
     #[error("out of memory growing handle pool beyond {slots} slots")]
+    #[non_exhaustive]
     OutOfMemory {
         /// Число слотов пула на момент отказа.
         slots: usize,

@@ -75,12 +75,9 @@ fn panic_becomes_error_and_worker_survives() {
                 panic!("boom");
             })
             .wait();
-        assert_eq!(
-            err,
-            Err::<(), _>(AsyncError::Panicked {
-                task: "spawn_async",
-                message: String::from("boom"),
-            })
+        assert!(
+            matches!(&err, Err(AsyncError::Panicked { task: "spawn_async", message, .. }) if message == "boom"),
+            "{err:?}"
         );
         // Тот же единственный воркер продолжает исполнять задачи.
         assert_eq!(exec.spawn_async(async { 5 }).wait(), Ok(5));
@@ -263,12 +260,9 @@ fn pool_shutdown_cancels_waiting_tasks_without_hang() {
 fn unblock_panic_becomes_error() {
     let (_pool, exec) = setup(1, AsyncConfig::default());
     let err = exec.unblock(|| -> u8 { panic!("disk on fire") }).wait();
-    assert_eq!(
-        err,
-        Err(AsyncError::Panicked {
-            task: "unblock",
-            message: String::from("disk on fire"),
-        })
+    assert!(
+        matches!(&err, Err(AsyncError::Panicked { task: "unblock", message, .. }) if message == "disk on fire"),
+        "{err:?}"
     );
     assert_eq!(exec.unblock(|| 3).wait(), Ok(3));
 }
@@ -322,10 +316,10 @@ fn blocking_overflow_is_rejected_immediately() {
         .collect();
     let start = Instant::now();
     let mut rejected = exec.unblock(|| ());
-    assert_eq!(
+    assert!(matches!(
         rejected.poll_ready(),
-        Some(Err(AsyncError::Overloaded { capacity: 2 }))
-    );
+        Some(Err(AsyncError::Overloaded { capacity: 2, .. }))
+    ));
     assert!(
         start.elapsed() < Duration::from_secs(1),
         "переполнение не ждёт"

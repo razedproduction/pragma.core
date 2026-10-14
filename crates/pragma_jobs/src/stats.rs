@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use pragma_sync::CachePadded;
+use pragma_sync::__private::CachePadded;
 
 use crate::Priority;
 

@@ -68,12 +68,9 @@ fn panic_becomes_error_and_worker_survives() {
         .spawn(Priority::Frame, || -> u32 { panic!("boom") })
         .join()
         .unwrap_err();
-    assert_eq!(
-        err,
-        JobError::Panicked {
-            job: "spawn".into(),
-            message: "boom".into()
-        }
+    assert!(
+        matches!(&err, JobError::Panicked { job, message, .. } if job == "spawn" && message == "boom"),
+        "{err:?}"
     );
     // Единственный воркер жив и продолжает работать.
     assert_eq!(pool.spawn(Priority::Frame, || 7).join().unwrap(), 7);
@@ -375,16 +372,26 @@ fn drop_with_cancel_policy_cancels_pending_jobs() {
 
 #[test]
 fn external_waiter_helps_when_workers_are_busy() {
+    const QUEUED: usize = 0;
+    const RUNNING: usize = 1;
+    const RELEASED: usize = 2;
     let pool = pool(1);
-    let gate = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(AtomicUsize::new(QUEUED));
     let busy = {
         let gate = Arc::clone(&gate);
         pool.spawn(Priority::Normal, move || {
-            while gate.load(Ordering::SeqCst) == 0 {
+            gate.store(RUNNING, Ordering::SeqCst);
+            while gate.load(Ordering::SeqCst) != RELEASED {
                 std::thread::sleep(Duration::from_millis(1));
             }
         })
     };
+    // Ждём, пока `busy` не начнёт исполняться на воркере. Иначе воркер может украсть ветвь
+    // `join`, а главный поток, помогая в ожидании, сам возьмёт `busy` из очереди и будет
+    // ждать `gate`, который никто, кроме него, не поднимет (зависание на 2 vCPU в CI).
+    while gate.load(Ordering::SeqCst) == QUEUED {
+        std::thread::sleep(Duration::from_millis(1));
+    }
     // Воркер занят; главный поток сам исполнит обе ветви.
     let (a, b) = pool.join(|| 1, || 2).unwrap();
     assert_eq!(a + b, 3);
@@ -392,7 +399,7 @@ fn external_waiter_helps_when_workers_are_busy() {
     pool.parallel_for(&mut v, Grain::Fixed(16), |x| *x += 1)
         .unwrap();
     assert!(v.iter().all(|&x| x == 2));
-    gate.store(1, Ordering::SeqCst);
+    gate.store(RELEASED, Ordering::SeqCst);
     busy.join().unwrap();
 }
 

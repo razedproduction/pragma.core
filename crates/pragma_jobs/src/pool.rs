@@ -7,8 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker as Deque};
-use pragma_base::tracing;
-use pragma_sync::{
+use pragma_sync::__private::{
     Backoff, CachePadded, JoinLatch, Parker, ScopedTask, StackJob, Unparker, join_on_stack,
 };
 

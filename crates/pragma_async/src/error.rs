@@ -11,6 +11,7 @@ pub enum AsyncError {
     Cancelled,
     /// Задача запаниковала; паника перехвачена и не уронила воркер.
     #[error("task `{task}` panicked: {message}")]
+    #[non_exhaustive]
     Panicked {
         /// Какая задача: `spawn_async` или `unblock`.
         task: &'static str,
@@ -19,12 +20,14 @@ pub enum AsyncError {
     },
     /// Blocking-пул переполнен: задача не принята, вызывающий не ждал.
     #[error("blocking pool is full ({capacity} pending tasks)")]
+    #[non_exhaustive]
     Overloaded {
         /// Лимит одновременно поставленных blocking-задач.
         capacity: usize,
     },
     /// ОС не дала создать поток blocking-пула, а свободных потоков нет.
     #[error("failed to spawn blocking thread `{thread}`: {message}")]
+    #[non_exhaustive]
     SpawnFailed {
         /// Имя потока.
         thread: String,
@@ -40,6 +43,7 @@ pub enum AsyncError {
     Consumed,
     /// Некорректная конфигурация исполнителя.
     #[error("invalid async config: {reason}")]
+    #[non_exhaustive]
     InvalidConfig {
         /// Что именно не так.
         reason: &'static str,

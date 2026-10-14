@@ -5,7 +5,7 @@ members = ["crates/*", "examples/*"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -15,19 +15,19 @@ keywords = ["gamedev", "job-system", "scheduler", "multithreading", "runtime"]
 categories = ["game-development", "concurrency"]
 
 [workspace.dependencies]
-# Internal crates (versioned so cargo-deny/publishing never see wildcards).
-pragma_base = { path = "crates/pragma_base", version = "0.5.0" }
-pragma_sync = { path = "crates/pragma_sync", version = "0.5.0" }
-pragma_sys = { path = "crates/pragma_sys", version = "0.5.0" }
-pragma_jobs = { path = "crates/pragma_jobs", version = "0.5.0" }
-pragma_graph = { path = "crates/pragma_graph", version = "0.5.0" }
-pragma_async = { path = "crates/pragma_async", version = "0.5.0" }
-pragma_core = { path = "crates/pragma_core", version = "0.5.0" }
+# Internal crates: exact versions (lockstep), so `pragma_sync::__private` can change in any
+# release together with its users (DECISIONS.md #42).
+pragma_base = { path = "crates/pragma_base", version = "=0.6.0" }
+pragma_sync = { path = "crates/pragma_sync", version = "=0.6.0" }
+pragma_sys = { path = "crates/pragma_sys", version = "=0.6.0" }
+pragma_jobs = { path = "crates/pragma_jobs", version = "=0.6.0" }
+pragma_graph = { path = "crates/pragma_graph", version = "=0.6.0" }
+pragma_async = { path = "crates/pragma_async", version = "=0.6.0" }
+pragma_core = { path = "crates/pragma_core", version = "=0.6.0" }
 
 # External - pure Rust only (see docs/reliability.md, deny.toml).
 crossbeam-deque = "0.8.8"
 crossbeam-utils = "0.8.23"
-crossbeam-channel = "0.5.17"
 async-task = "4.7.1"
 futures-lite = "2.6.1"
 thiserror = "2.0.21"
@@ -47,6 +47,7 @@ rayon = "1.11.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"
+missing_debug_implementations = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 

@@ -61,7 +61,8 @@ pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> 
 /// время `f`: вынести её (или имя) наружу нельзя, скопируйте нужное.
 ///
 /// ```
-/// use pragma_sync::{current_label, run_labeled};
+/// use pragma_sync::__private::run_labeled;
+/// use pragma_sync::current_label;
 ///
 /// run_labeled("graph", "physics", || {
 ///     run_labeled("scope", "parallel_for chunk", || {

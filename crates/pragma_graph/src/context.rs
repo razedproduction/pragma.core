@@ -88,9 +88,17 @@ impl<'a> TaskContext<'a> {
 ///
 /// Ошибка `E` превращается в [`GraphError::TaskFailed`]; если это сама [`GraphError`]
 /// (например, проброшенная через `?` из [`TaskContext::read`]), она возвращается как есть.
-pub trait TaskResult {
+///
+/// Трейт запечатан: реализовать его вне крейта нельзя (DECISIONS #42).
+pub trait TaskResult: sealed::Sealed {
     /// Приводит результат задачи `task` к результату графа.
     fn into_result(self, task: &str) -> Result<(), GraphError>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for () {}
+    impl<E> Sealed for Result<(), E> {}
 }
 
 impl TaskResult for () {

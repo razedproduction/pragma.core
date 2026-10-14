@@ -78,6 +78,21 @@ impl<T> Default for HandlePool<T> {
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for HandlePool<T> {
+    /// Живые значения с их хэндлами.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let live = self.slots.iter().zip(0_u32..).filter_map(|(slot, index)| {
+            let handle = Handle::<T> {
+                index,
+                generation: slot.generation,
+                _marker: PhantomData,
+            };
+            slot.value.as_ref().map(|value| (handle, value))
+        });
+        f.debug_map().entries(live).finish()
+    }
+}
+
 impl<T> HandlePool<T> {
     /// Пустой пул.
     #[must_use]

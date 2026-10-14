@@ -17,6 +17,7 @@ pragma_base = { workspace = true }
 pragma_jobs = { workspace = true }
 pragma_sync = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 puffin = { workspace = true, optional = true }
 
 [dev-dependencies]

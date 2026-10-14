@@ -5,7 +5,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 
 use async_task::Runnable;
-use pragma_base::tracing;
 
 use crate::{AsyncConfig, AsyncError};
 

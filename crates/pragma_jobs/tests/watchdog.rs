@@ -9,10 +9,10 @@ use std::fmt::{self, Write as _};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use pragma_base::tracing::field::{Field, Visit};
-use pragma_base::tracing::span::{Attributes, Id, Record};
-use pragma_base::tracing::{self, Event, Metadata, Subscriber};
 use pragma_jobs::{PoolConfig, Priority, ThreadPool};
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{self, Event, Metadata, Subscriber};
 
 static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 

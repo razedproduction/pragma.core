@@ -8,10 +8,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use pragma_base::tracing::span::{Attributes, Id, Record};
-use pragma_base::tracing::{self, Event, Metadata, Subscriber};
 use pragma_graph::{FrameGraph, FrameGraphBuilder, GraphError, Resources, TaskContext};
 use pragma_jobs::{PoolConfig, ThreadPool, current_task};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{self, Event, Metadata, Subscriber};
 
 /// Системный аллокатор, считающий аллокации, пока поднят `COUNTING`.
 struct Counting;

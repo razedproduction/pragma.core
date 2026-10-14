@@ -61,10 +61,10 @@ fn without_memory<R>(f: impl FnOnce() -> R) -> R {
 #[test]
 fn growth_without_memory_is_an_error_and_pool_stays_usable() {
     let mut pool: HandlePool<u64> = HandlePool::new();
-    assert_eq!(
+    assert!(matches!(
         without_memory(|| pool.insert(1)),
-        Err(BaseError::OutOfMemory { slots: 0 })
-    );
+        Err(BaseError::OutOfMemory { slots: 0, .. })
+    ));
     assert!(pool.is_empty());
 
     // С памятью пул растёт как обычно.
@@ -81,7 +81,7 @@ fn growth_without_memory_is_an_error_and_pool_stays_usable() {
 
     // Рано или поздно рост требует выделения — ошибка с текущим размером, без `abort`.
     let error = without_memory(|| (0..1_000_000_u64).find_map(|v| pool.insert(v).err()));
-    let Some(BaseError::OutOfMemory { slots }) = error else {
+    let Some(BaseError::OutOfMemory { slots, .. }) = error else {
         panic!("expected OutOfMemory, got {error:?}");
     };
     assert_eq!(slots, pool.len());

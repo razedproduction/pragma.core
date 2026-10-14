@@ -2,8 +2,7 @@ use std::marker::PhantomData;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use pragma_base::tracing;
-use pragma_sync::{StackSlot, TaskScope};
+use pragma_sync::__private::{StackSlot, TaskScope};
 
 use crate::pool::{Job, Shared, enter, help_once, inherited_priority, join_as_participant};
 use crate::{Grain, JobError, Priority, ThreadPool};
@@ -144,7 +143,7 @@ impl ThreadPool {
             first_error: &first_error,
         };
         let body = enter(shared, || {
-            pragma_sync::scope(
+            pragma_sync::__private::scope(
                 data,
                 |inner| {
                     panic::catch_unwind(AssertUnwindSafe(|| {

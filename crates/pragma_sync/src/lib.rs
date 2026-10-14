@@ -9,12 +9,11 @@
 //! |---|---|
 //! | [`CountLatch`] | Ждать N событий |
 //! | [`AtomicCounter`] | Счётчик задач группы; ждать нуля, помогая исполнять работу |
-//! | [`ArrivalCounter`] | «Последний из N прибывших продолжает» — счётчики зависимостей графа кадра |
-//! | [`Parker`] / [`Unparker`] | Сон простаивающего воркера и адресное пробуждение |
-//! | [`scope()`] / [`TaskScope`] / [`ScopedTask`] | Задачи с заимствованием стека (стирание лайфтайма) |
-//! | [`StackSlot`] | Задача области без аллокации (замыкание на стеке владельца) |
-//! | [`join_on_stack`] / [`StackJob`] | Fork-join без аллокаций и `Arc`: вторая ветвь на стеке с латчем |
-//! | [`run_labeled`] / [`current_label`] | Метка задачи потока для panic hook и крэш-репортов |
+//! | [`current_label`] / [`TaskLabel`] | Метка задачи потока для panic hook и крэш-репортов |
+//!
+//! Строительные блоки планировщика (`ArrivalCounter`, `Parker`, `scope`, `join_on_stack`,
+//! `run_labeled` и др.) лежат в скрытом модуле `__private`: их использует `pragma_jobs`, они
+//! меняются вместе с ним и **не входят в гарантии semver** (DECISIONS #42).
 //!
 //! ```
 //! use pragma_sync::{AtomicCounter, CountLatch};
@@ -50,12 +49,20 @@ mod parker;
 mod primitives;
 mod scope;
 
-pub use arrival::ArrivalCounter;
 pub use counter::AtomicCounter;
-pub use crossbeam_utils::{Backoff, CachePadded};
 pub use error::SyncError;
-pub use join::{JoinLatch, NO_OWNER, StackJob, join_on_stack};
-pub use label::{TaskLabel, current_label, run_labeled};
+pub use label::{TaskLabel, current_label};
 pub use latch::CountLatch;
-pub use parker::{Parker, Unparker};
-pub use scope::{ScopedTask, StackSlot, TaskScope, scope};
+
+/// Внутренности планировщика для крейтов `pragma.core`. **Не входят в гарантии semver**:
+/// меняются в любом релизе вместе с `pragma_jobs`, который зависит от этого крейта точной
+/// версией (DECISIONS #42).
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::arrival::ArrivalCounter;
+    pub use crate::join::{JoinLatch, NO_OWNER, StackJob, join_on_stack};
+    pub use crate::label::run_labeled;
+    pub use crate::parker::{Parker, Unparker};
+    pub use crate::scope::{ScopedTask, StackSlot, TaskScope, scope};
+    pub use crossbeam_utils::{Backoff, CachePadded};
+}
