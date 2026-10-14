@@ -22,7 +22,8 @@ L5  frame_sim       пример-вертикальный срез (examples/, �
 L4  pragma_core     фасад: re-export, prelude, feature-флаги (jobs, graph, async)
 L3  pragma_graph    граф кадра            pragma_async   async-задачи
 L2  pragma_jobs     пул, work-stealing, join/scope/parallel_for
-L1  pragma_sync     латчи, парковка, backoff, cache padding   ← единственный unsafe
+L1  pragma_sync     латчи, парковка, backoff, метки задач     ← unsafe (под Miri + loom)
+    pragma_sys      имена/приоритеты потоков, affinity        ← unsafe только FFI (DECISIONS #27)
 L0  pragma_base     ошибки, Handle/HandlePool, Tick, tracing
 ```
 
@@ -62,6 +63,11 @@ L0  pragma_base     ошибки, Handle/HandlePool, Tick, tracing
   Новая задача будит одного спящего, только если нет ищущих.
 - `unsafe` для стирания лайфтайма задач `scope` и задач-на-стеке `join` (`StackSlot`, без
   аллокации) живёт в `pragma_sync::scope` (DECISIONS #15); `pragma_jobs` — `forbid(unsafe_code)`.
+- Платформенные настройки воркеров (M4): `PoolConfig::with_thread_priority` и `with_affinity`
+  применяет сам воркер при старте через `pragma_jobs::sys` (§7); отказ ОС — предупреждение.
+- Метрики (M4): у каждого потока пула (воркеры и внешние слоты) свой набор счётчиков на своей
+  кэш-линии, пишет его один поток (`load` + `store`, без RMW). `ThreadPool::stats()` читает их и
+  длины очередей без блокировок; на исполнение и детерминизм не влияет.
 
 API (M1):
 
@@ -203,11 +209,22 @@ if let Some(result) = level.poll_ready() { /* применить */ }
 
 ## 5. Наблюдаемость
 
-- `tracing`-span на задачу графа и на `scope` (имя задачи, приоритет, воркер). Выключается
-  на этапе компиляции через уровни `tracing`.
-- Метрики пула (M4): задач выполнено, краж, время простоя и парковок по воркерам, глубина очередей.
-- Опционально (M4): интеграция `puffin` за feature-флагом. Tracy — только по отдельному решению,
-  потому что это C++ (см. `deny.toml`).
+- `tracing`: span `graph_task` (поля `task`, `priority`, `worker`) и `frame_graph` — уровень
+  `DEBUG`; `scope`/`parallel_for`/`parallel_reduce` — `TRACE`. Поля вычисляются, только если
+  уровень включён; выключается при компиляции фичами `tracing` (`max_level_*`,
+  `release_max_level_*`). Кадр графа и с подписчиком не аллоцирует (`tests/alloc.rs`).
+- Метрики пула: `ThreadPool::stats() -> PoolStats` — по воркерам и внешним потокам: задач
+  выполнено, краж, парковок, время простоя и сна, глубина локальных и глобальных очередей.
+- Контекст текущей задачи (DECISIONS #28): `pragma_jobs::labeled(kind, name, f)` ставит метку,
+  `current_task(|t| …)` читает её (с цепочкой внешних меток потока) без аллокаций и блокировок —
+  из panic hook или обработчика падений. Метки у задач графа (`graph`), `spawn`/`spawn_named`,
+  задач `scope`/`parallel_*`, `spawn_detached`, async (`spawn_async_named`) и `unblock`; вторая
+  ветвь `join` метки не получает (горячий путь), виновника называет внешняя метка.
+- Watchdog (только debug, DECISIONS #29): поток пула, задача с меткой на котором исполняется
+  дольше `PoolConfig::with_watchdog` (5 с по умолчанию), — одно предупреждение
+  `pragma_jobs::watchdog` с именем задачи и потока. В release кода нет.
+- Feature `puffin` (puffin 0.19.1): области на кадр графа, задачи графа и операции пула; кадр
+  размечает приложение. Tracy — только по отдельному решению, потому что это C++ (`deny.toml`).
 
 ## 6. Детерминизм
 
@@ -224,7 +241,11 @@ if let Some(result) = level.poll_ready() { /* применить */ }
 ## 7. Платформы
 
 Windows и Linux, x86_64 (DECISIONS #2). Платформенный код (имена потоков, приоритеты потоков,
-affinity) лежит только в `pragma_jobs::sys` за `cfg(target_os)` и использует системные FFI
-(`windows-sys`, `libc`). Если позже понадобится wasm, help-while-wait позволяет добавить
+affinity) лежит только в крейте `pragma_sys` (L1, DECISIONS #27; в `pragma_jobs` — re-export
+`pragma_jobs::sys`) за `cfg(target_os)` и использует системные FFI (`windows-sys`, `libc`).
+Каждый вызов — `// SAFETY:`; Miri FFI не исполняет, поэтому крейт проверяется тестами на
+реальной ОС в CI обеих платформ. На других ОС функции возвращают `SysError::Unsupported`.
+Ограничения: на Windows affinity — ядра первой группы (`< 64`); на Linux повышение приоритета
+требует `CAP_SYS_NICE`, а без прав нельзя и вернуть `nice` назад после `Low`. Если позже понадобится wasm, help-while-wait позволяет добавить
 однопоточный режим (все задачи исполняет вызывающий поток) без изменения публичного API.
 Это отдельная веха.

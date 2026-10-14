@@ -64,18 +64,29 @@ impl Executor {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        self.spawn_async_named(SPAWN_ASYNC, future)
+    }
+
+    /// Как [`spawn_async`](Self::spawn_async), но с именем задачи: каждый `poll` future
+    /// исполняется с меткой `async`/`name` ([`pragma_jobs::current_task`] — для panic hook и
+    /// watchdog), имя попадает и в [`AsyncError::Panicked`].
+    pub fn spawn_async_named<F>(&self, name: &'static str, future: F) -> AsyncHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
         let caught = AssertUnwindSafe(future).catch_unwind();
         let future = async move {
             caught
                 .await
-                .map_err(|payload| AsyncError::panicked(SPAWN_ASYNC, &*payload))
+                .map_err(|payload| AsyncError::panicked(name, &*payload))
         };
         let spawner = self.inner.spawner.clone();
         let schedule = move |runnable: Runnable| {
             // Отказ (пул остановлен) сбрасывает `Runnable` — `async-task` отменяет задачу и
             // будит ожидающего, поэтому ошибку здесь обрабатывать не нужно.
             let _ = spawner.spawn_detached(Priority::Background, move || {
-                runnable.run();
+                pragma_jobs::labeled("async", name, || runnable.run());
             });
         };
         let (runnable, task) = async_task::spawn(future, schedule);
@@ -101,7 +112,8 @@ impl Executor {
         };
         let future = async move {
             let _slot = slot;
-            panic::catch_unwind(AssertUnwindSafe(f))
+            let labeled = || pragma_jobs::labeled("unblock", UNBLOCK, f);
+            panic::catch_unwind(AssertUnwindSafe(labeled))
                 .map_err(|payload| AsyncError::panicked(UNBLOCK, &*payload))
         };
         match self

@@ -26,7 +26,9 @@
 
 ## 3. `unsafe`
 
-- `#![forbid(unsafe_code)]` в каждом крейте, кроме `pragma_sync` (`layers.toml: unsafe_allowed`).
+- `#![forbid(unsafe_code)]` в каждом крейте, кроме `pragma_sync` и `pragma_sys`
+  (`layers.toml: unsafe_allowed`). В `pragma_sys` — только вызовы системных FFI (DECISIONS #27);
+  Miri их не исполняет, крейт проверяется тестами на Windows и Linux в CI.
 - В `pragma_sync`: `#![deny(unsafe_op_in_unsafe_fn)]`, `clippy::undocumented_unsafe_blocks = deny`,
   комментарий `// SAFETY:` на каждый блок с объяснением, почему инвариант выполняется.
 - Тесты `pragma_sync` гоняются под Miri (`cargo +nightly miri test -p pragma_sync`).
@@ -51,7 +53,8 @@
 | Blocking-пул переполнен | `AsyncError::Overloaded` сразу, вызывающий (кадр) не ждёт |
 | Остановка пула или исполнителя при живых async-задачах | Задачи отменяются, ожидающие получают `Cancelled`, а не зависают |
 | `wait()` async-хэндла из воркера или кадра графа | `AsyncError::WouldBlock` вместо дедлока (DECISIONS #25) |
-| Зависание задачи | Watchdog в debug-сборках (M4): предупреждение в лог с именем задачи |
+| Зависание задачи | Watchdog в debug-сборках: одно предупреждение `pragma_jobs::watchdog` с именем задачи и потока (`PoolConfig::with_watchdog`, 5 с); в release кода нет |
+| ОС отказала в приоритете или привязке потока | Предупреждение в лог, воркер работает без настройки (`SysError` из `pragma_sys`) |
 
 ### Что ядро не гарантирует
 
@@ -66,8 +69,10 @@
 | Нехватка памяти | Стандартный аллокатор вызывает `handle_alloc_error` → `abort` |
 | Ошибка доступа к памяти, сигнал ОС | Вне модели Rust; при отсутствии `unsafe`-багов в `pragma_sync` не возникает |
 
-Что ядро даёт приложению для этих случаев: контекст текущей задачи на потоке (M4) — его можно
-прочитать из panic hook или обработчика падений, чтобы назвать виновника в отчёте; детерминизм
+Что ядро даёт приложению для этих случаев: контекст текущей задачи на потоке —
+`pragma_jobs::current_task(|t| …)` без аллокаций и блокировок (DECISIONS #28); его можно
+прочитать из panic hook или обработчика падений, чтобы назвать виновника в отчёте (тест
+`pragma_core/tests/crash_context.rs`, без аллокаций — `pragma_graph/tests/alloc.rs`); детерминизм
 (§5) — чтобы падение воспроизвести повтором сценария.
 
 ## 5. Детерминизм
@@ -87,7 +92,7 @@
 | UB | Miri | `pragma_sync`, а также тесты `pragma_jobs` в однопоточном режиме | M1 |
 | Стресс / soak | Длительные тесты `#[ignore]` | Миллионы задач, вложенные `join`, случайные паники; async-задачи со случайной отменой (M3) | M1 |
 | Fuzz | `cargo-fuzz` (`fuzz/`, отдельный workspace) | Построитель графа на произвольных описаниях; тот же оракул — в proptest | M2 |
-| Аллокации | Считающий глобальный аллокатор (`pragma_graph/tests/alloc.rs`) | Кадр графа без аллокаций | M2 |
+| Аллокации | Считающий глобальный аллокатор (`pragma_graph/tests/alloc.rs`) | Кадр графа без аллокаций (с M4 — и с подписчиком `tracing`, и чтение метки из panic hook) | M2 |
 | Детерминизм | Хеш состояния (`examples/frame_sim --verify`) | 1/N воркеров, мгновенная и запаздывающая фоновая загрузка | M3; обязательный набор сценариев — M5 |
 | Производительность | `criterion` | spawn/join, `parallel_for`, граф; сравнение с `rayon` | M1; гейт регрессии с M5 |
 
@@ -106,6 +111,7 @@
 9. `cargo hack clippy --each-feature`: каждая фича фасада собирается отдельно
 10. Fuzz построителя графа, 60 с (`cargo +nightly fuzz run graph_build`, Linux)
 11. Вертикальный срез: `cargo run -p frame_sim --release -- --ticks 300 --verify 1,4` (Windows + Linux)
+12. Watchdog в release не срабатывает: `cargo test -p pragma_jobs --release --test watchdog` (Windows + Linux)
 
 Ночью ([`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)): стресс-тесты
 `pragma_jobs` (`--ignored`) на Windows и Linux.

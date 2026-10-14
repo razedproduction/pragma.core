@@ -30,6 +30,8 @@ jobs:
       # Вертикальный срез M3: 100k сущностей, 300 тиков; хеш каждого тика совпадает на 1 и
       # 4 воркерах при мгновенной и при запаздывающей фоновой загрузке.
       - run: cargo run -p frame_sim --release -- --ticks 300 --verify 1,4
+      # Watchdog есть только в debug: в release тот же тест проверяет, что предупреждений нет.
+      - run: cargo test -p pragma_jobs --release --test watchdog
 
   features:
     name: cargo hack --each-feature

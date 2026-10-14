@@ -8,11 +8,17 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Области `scope`/`parallel_*` в профайлере кадра puffin (DECISIONS.md #29).
+puffin = ["dep:puffin"]
+
 [dependencies]
 pragma_base = { workspace = true }
 pragma_sync = { workspace = true }
+pragma_sys = { workspace = true }
 crossbeam-deque = { workspace = true }
 thiserror = { workspace = true }
+puffin = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

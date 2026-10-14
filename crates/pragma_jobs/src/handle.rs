@@ -20,6 +20,7 @@ struct JobState<T> {
 pub struct JobHandle<T> {
     state: Arc<JobState<T>>,
     shared: Arc<Shared>,
+    name: &'static str,
 }
 
 impl<T> std::fmt::Debug for JobHandle<T> {
@@ -49,13 +50,14 @@ impl<T> JobHandle<T> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
-            .unwrap_or_else(|| Err(JobError::cancelled(SPAWN_JOB)))
+            .unwrap_or_else(|| Err(JobError::cancelled(self.name)))
     }
 }
 
 /// Сторона исполнителя: записывает результат; сброс без результата означает отмену.
 struct Completer<T> {
     state: Arc<JobState<T>>,
+    name: &'static str,
 }
 
 impl<T> Completer<T> {
@@ -78,7 +80,7 @@ impl<T> Drop for Completer<T> {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             if slot.is_none() {
-                *slot = Some(Err(JobError::cancelled(SPAWN_JOB)));
+                *slot = Some(Err(JobError::cancelled(self.name)));
             }
         }
         self.state.done.decrement();
@@ -92,22 +94,35 @@ impl ThreadPool {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.spawn_named(SPAWN_JOB, priority, f)
+    }
+
+    /// Как [`spawn`](Self::spawn), но с именем задачи: оно попадает в метку задачи
+    /// ([`current_task`](crate::current_task), watchdog) и в [`JobError::Panicked`].
+    pub fn spawn_named<F, T>(&self, name: &'static str, priority: Priority, f: F) -> JobHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let state = Arc::new(JobState {
             done: AtomicCounter::new(1),
             result: Mutex::new(None),
         });
         let completer = Completer {
             state: Arc::clone(&state),
+            name,
         };
         let job = Job::Boxed(Box::new(move || {
-            let result = panic::catch_unwind(AssertUnwindSafe(f))
-                .map_err(|payload| JobError::panicked(SPAWN_JOB, &*payload));
+            let labeled = || crate::labeled("spawn", name, f);
+            let result = panic::catch_unwind(AssertUnwindSafe(labeled))
+                .map_err(|payload| JobError::panicked(name, &*payload));
             completer.complete(result);
         }));
         self.shared.push(job, priority);
         JobHandle {
             state,
             shared: Arc::clone(&self.shared),
+            name,
         }
     }
 }

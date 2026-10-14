@@ -56,7 +56,10 @@ impl Spawner {
             drop(f);
             return Err(JobError::cancelled(DETACHED_JOB));
         };
-        if shared.push_detached(Job::Boxed(Box::new(f)), priority) {
+        let job = Job::Boxed(Box::new(move || {
+            crate::labeled("detached", DETACHED_JOB, f)
+        }));
+        if shared.push_detached(job, priority) {
             Ok(())
         } else {
             Err(JobError::cancelled(DETACHED_JOB))

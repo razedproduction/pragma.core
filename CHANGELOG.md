@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+### Added — M4a «Наблюдаемость»
+- Новый крейт `pragma_sys` (L1, `unsafe` только для системных FFI, DECISIONS #27):
+  `set_current_thread_name`, `set_current_thread_priority` / `current_thread_priority`
+  (`ThreadPriority::{Low, Normal, High}`), `pin_current_thread`, `current_core`; ошибки —
+  `SysError`. Доступен как `pragma_jobs::sys` и `pragma_core::sys`.
+- `PoolConfig::with_thread_priority`, `with_affinity` (воркер `i` → `cores[i % len]`): отказ
+  ОС — предупреждение в лог, воркер работает без настройки.
+- Контекст текущей задачи для крэш-репортов (DECISIONS #28): `pragma_sync::run_labeled` /
+  `current_label` / `TaskLabel`, в `pragma_jobs` — `labeled(kind, name, f)` и `current_task(f)`.
+  Метки у задач графа, `spawn`, задач `scope`/`parallel_*`, `spawn_detached`, async и `unblock`;
+  чтение — без аллокаций, годится для panic hook.
+- `ThreadPool::spawn_named`, `Executor::spawn_async_named`: имя задачи в метке и в ошибке паники.
+- `ThreadPool::stats() -> PoolStats` (`ThreadStats` по воркерам и внешним потокам): выполнено,
+  украдено, парковки, время простоя и сна, глубина очередей. Без блокировок и RMW на горячем пути.
+- Watchdog зависших задач (только debug): `PoolConfig::with_watchdog(Option<Duration>)`, по
+  умолчанию `DEFAULT_WATCHDOG` = 5 с; одно `tracing::warn!` (target `pragma_jobs::watchdog`) на
+  задачу. В release кода нет.
+- `tracing`: span `graph_task` (задача, приоритет, воркер) и `frame_graph` — `DEBUG`;
+  `scope`/`parallel_for`/`parallel_reduce` — `TRACE`.
+- Feature `puffin` (`pragma_jobs`, `pragma_graph`, фасад; puffin 0.19.1, DECISIONS #29):
+  области профайлера на кадр, задачи графа и операции пула; фасад re-export-ит `puffin`.
+- `ThreadPool::current_worker_index`, `pragma_jobs::current_priority`, `Priority::as_str`.
+- Тесты: `pragma_jobs/tests/observability.rs`, `tests/watchdog.rs` (debug и release),
+  `pragma_core/tests/crash_context.rs` (panic hook называет задачу графа / spawn / async /
+  unblock); `pragma_graph/tests/alloc.rs` — кадр без аллокаций и с подписчиком `tracing`, чтение
+  метки из panic hook без аллокаций.
+
+### Changed — M4a
+- `JobError` отменённой/упавшей задачи `spawn_named` несёт её имя вместо `spawn`.
+
 ### Added — M3 «Async-задачи и вертикальный срез»
 - `pragma_async`: `Executor::new(&pool, AsyncConfig)` — исполнитель на `async-task` поверх пула.
   `spawn_async(fut) -> AsyncHandle<T>`: future исполняется на воркерах с приоритетом
