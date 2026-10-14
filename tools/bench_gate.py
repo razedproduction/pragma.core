@@ -12,8 +12,8 @@ criterion по кругам: шум общего раннера только з�
                на него изменения pragma не влияют, его сдвиг — шум раннера;
   normalized = ratio / ref_ratio.
 Замер с эталоном падает, если ratio > 1 + threshold И normalized > 1 + threshold.
-Замер без эталона (frame_sim) падает, если ratio > 1 + threshold + noise, где noise — самый
-большой сдвиг эталонов в этом прогоне.
+Замер без эталона (frame_sim) падает, если ratio > 1 + threshold + noise, где noise — его
+собственный шум: медиана / минимум − 1 по запускам каждой ревизии, наибольший из двух.
 
 Отдельно (предупреждение, не падение): fib(20) у pragma ≤ 2× rayon на головной ревизии.
 
@@ -53,6 +53,7 @@ REFERENCES = {
 FIB = ("join/pragma_fib20", "join/rayon_fib20")
 FIB_LIMIT = 2.0
 FRAME_SIM_TICKS = 300
+FRAME_SIM_RUNS = 3
 
 
 @dataclass
@@ -114,7 +115,8 @@ def build(side: Side) -> None:
     run(["cargo", "build", "-p", "frame_sim", "--release"], side)
 
 
-def measure(side: Side) -> dict[str, float]:
+def measure(side: Side, samples: dict[str, list[float]]) -> dict[str, float]:
+    """Замеры одного круга; все запуски frame_sim дописываются в `samples` (для оценки шума)."""
     results: dict[str, float] = {}
     for package, bench, pattern in BENCHES:
         run(
@@ -124,16 +126,25 @@ def measure(side: Side) -> dict[str, float]:
     results.update(criterion_results(side))
     exe = side.target / "release" / ("frame_sim.exe" if os.name == "nt" else "frame_sim")
     for workers in frame_sim_workers():
-        # Два запуска подряд, лучший: время включает создание пула и шумит сильнее criterion.
-        ms = min(
+        key = f"frame_sim/workers_{workers}"
+        # Несколько запусков подряд, лучший: время включает создание пула и шумит сильнее
+        # criterion. Нс, как у criterion, чтобы таблица была однородной.
+        runs = [
             frame_sim_ms_per_tick(
                 run([str(exe), "--ticks", str(FRAME_SIM_TICKS), "--workers", str(workers)], side)
             )
-            for _ in range(2)
-        )
-        # Нс, как у criterion, чтобы таблица была однородной.
-        results[f"frame_sim/workers_{workers}"] = ms * 1e6
+            * 1e6
+            for _ in range(FRAME_SIM_RUNS)
+        ]
+        samples.setdefault(key, []).extend(runs)
+        results[key] = min(runs)
     return results
+
+
+def spread(values: list[float]) -> float:
+    """Шум ревизии по её же запускам: медиана / минимум − 1 (выброс один не раздувает)."""
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2] / ordered[0] - 1.0
 
 
 def best(rounds: list[dict[str, float]]) -> dict[str, float]:
@@ -172,16 +183,24 @@ def main() -> int:
     for side in sides:
         build(side)
     rounds: dict[str, list[dict[str, float]]] = {"base": [], "head": []}
+    samples: dict[str, dict[str, list[float]]] = {"base": {}, "head": {}}
     for r in range(args.rounds):
         for side in sides:
             print(f"--- round {r + 1}/{args.rounds}: {side.name}", flush=True)
-            rounds[side.name].append(measure(side))
+            rounds[side.name].append(measure(side, samples[side.name]))
     base, head = best(rounds["base"]), best(rounds["head"])
 
     ref_ratios = {
         ref: head[ref] / base[ref] for ref in set(REFERENCES.values()) if ref in base and ref in head
     }
     noise = max((abs(r - 1.0) for r in ref_ratios.values()), default=0.0)
+    # Шум замера без эталона — по его собственным запускам на каждой ревизии, а не по эталонам
+    # criterion: наносекундный `rayon_single` шумит на 20–35% и раздувал бы порог frame_sim.
+    own_noise = {
+        key: max(spread(samples["base"][key]), spread(samples["head"][key]))
+        for key in samples["head"]
+        if key in samples["base"]
+    }
     limit = 1.0 + args.threshold
 
     rows, failures = [], []
@@ -195,8 +214,9 @@ def main() -> int:
             note = f"{ref_ratios[ref]:.3f} ({ref.split('/', 1)[1]})"
         else:
             normalized = ratio
-            failed = ratio > limit + noise
-            note = f"порог {limit + noise:.3f} (шум {noise:.3f})"
+            key_noise = own_noise.get(key, noise)
+            failed = ratio > limit + key_noise
+            note = f"порог {limit + key_noise:.3f} (шум запусков {key_noise:.3f})"
         verdict = "РЕГРЕССИЯ" if failed else "ok"
         if failed:
             failures.append(key)

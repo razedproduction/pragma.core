@@ -442,6 +442,23 @@ impl Shared {
         if self.sleeping.load(Ordering::SeqCst) == 0 || self.searching.load(Ordering::SeqCst) > 0 {
             return;
         }
+        self.wake_one();
+    }
+
+    /// Как [`notify_one`](Self::notify_one), но без барьера — после push в собственную очередь
+    /// участника, который сам дождётся этой задачи (`join`). Без барьера проверка может
+    /// разминуться с засыпающим воркером, но это стоит только параллелизма, не зависания:
+    /// задачу из своей очереди владелец снимет сам, а уснувший проснётся при следующем push
+    /// или по `PARK_TIMEOUT` (DECISIONS #40). Барьер — ~10% времени вложенного `join`.
+    fn notify_one_local(&self) {
+        if self.sleeping.load(Ordering::Relaxed) == 0 || self.searching.load(Ordering::Relaxed) > 0
+        {
+            return;
+        }
+        self.wake_one();
+    }
+
+    fn wake_one(&self) {
         let target = {
             let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
             let target = idle.pop();
@@ -864,7 +881,7 @@ impl WorkerCtx {
             |job| {
                 let id = job.id();
                 queue.push(Job::Stack(job));
-                self.shared.notify_one();
+                self.shared.notify_one_local();
                 let ra = panic::catch_unwind(AssertUnwindSafe(a));
                 // `a` забрала из очереди всё, что положила сама (кроме `spawn` без ожидания),
                 // поэтому сверху — наша `b`, если её не украли.
