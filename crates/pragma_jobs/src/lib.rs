@@ -61,7 +61,7 @@ mod stats;
 #[cfg(debug_assertions)]
 mod watchdog;
 
-pub use config::{DEFAULT_WATCHDOG, PoolConfig, ShutdownPolicy};
+pub use config::{DEFAULT_IDLE_SPIN, DEFAULT_WATCHDOG, PoolConfig, ShutdownPolicy};
 pub use error::{JobError, JobsError};
 pub use handle::JobHandle;
 pub use pool::ThreadPool;

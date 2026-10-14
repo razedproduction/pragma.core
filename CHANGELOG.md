@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Changed — M4b «Тюнинг»
+- `ThreadPool::join` на воркере и во внешнем слоте — вторая ветвь на стеке с латчем
+  (`pragma_sync::join_on_stack`, DECISIONS #30): не украденная ветвь исполняется владельцем
+  без атомарных RMW. fib(20): 538 → ~200 µs (≤ 2× rayon, было 4.6–5.5×).
+- Воркер перед кражей проверяет `is_empty` (без входа в эпоху crossbeam) и регистрируется в
+  `crossbeam-epoch` при старте, а не при первой краже посреди кадра.
+- У каждого внешнего слота свой `Parker`: владелец `join`, ждущий украденную ветвь, спит до
+  пробуждения вором, а не опрашивает счётчик.
+
+### Added — M4b
+- `pragma_sync::join_on_stack`, `StackJob`, `JoinLatch`, `NO_OWNER` (+ loom-модель и Miri).
+- `PoolConfig::with_idle_spin` / `DEFAULT_IDLE_SPIN` (32): сколько раундов воркер ищет работу
+  перед парковкой (DECISIONS #32).
+- `docs/perf.md`: железо, команды, число прогонов и разброс, результаты до/после.
+- Бенч `pragma_async/benches/async.rs`: цена перепланирования async-задачи и `Box` в ней
+  (`Box` оставлен — ~6% цены, DECISIONS #31).
+
 ### Added — M4a «Наблюдаемость»
 - Новый крейт `pragma_sys` (L1, `unsafe` только для системных FFI, DECISIONS #27):
   `set_current_thread_name`, `set_current_thread_priority` / `current_thread_priority`

@@ -5,8 +5,20 @@ use std::sync::{Arc, Mutex, PoisonError};
 use pragma_base::tracing;
 use pragma_sync::{StackSlot, TaskScope};
 
-use crate::pool::{Job, Shared, enter, help_once, inherited_priority};
+use crate::pool::{Job, Shared, enter, help_once, inherited_priority, join_as_participant};
 use crate::{Grain, JobError, Priority, ThreadPool};
+
+/// Исход двух ветвей `join`: паника `a` важнее, `b` без результата — отменена.
+fn join_result<RA, RB>(
+    (ra, rb): (std::thread::Result<RA>, Option<std::thread::Result<RB>>),
+) -> Result<(RA, RB), JobError> {
+    let ra = ra.map_err(|payload| JobError::panicked("join a", &*payload))?;
+    match rb {
+        Some(Ok(rb)) => Ok((ra, rb)),
+        Some(Err(payload)) => Err(JobError::panicked("join b", &*payload)),
+        None => Err(JobError::cancelled("join b")),
+    }
+}
 
 /// Span `tracing` (уровень `TRACE`) и область puffin на время операции пула `$op`.
 /// Поля span вычисляются, только если уровень включён.
@@ -156,6 +168,28 @@ impl ThreadPool {
     /// Fork-join: `a` исполняется на текущем потоке, `b` — в пуле (или тоже здесь, если его
     /// никто не украл). Вложенные `join` не дедлочат ни при каком числе воркеров.
     pub fn join<A, B, RA, RB>(&self, a: A, b: B) -> Result<(RA, RB), JobError>
+    where
+        A: FnOnce() -> RA,
+        B: FnOnce() -> RB + Send,
+        RB: Send,
+    {
+        // Горячий путь — уже участник пула (вложенный `join`, задача графа).
+        let (a, b) = match join_as_participant(&self.shared, a, b) {
+            Ok(branches) => return join_result(branches),
+            Err(branches) => branches,
+        };
+        // Внешний поток: занять слот и повторить; без свободного слота — через область.
+        enter(&self.shared, move || {
+            match join_as_participant(&self.shared, a, b) {
+                Ok(branches) => join_result(branches),
+                Err((a, b)) => self.join_scoped(a, b),
+            }
+        })
+    }
+
+    /// `join` для потока вне пула без свободного внешнего слота: `b` — задача области
+    /// (через глобальную очередь), ожидание — на счётчике области.
+    fn join_scoped<A, B, RA, RB>(&self, a: A, b: B) -> Result<(RA, RB), JobError>
     where
         A: FnOnce() -> RA,
         B: FnOnce() -> RB + Send,
