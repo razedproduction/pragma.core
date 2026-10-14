@@ -28,6 +28,7 @@ frame_sim = 5     # пример-вертикальный срез (examples/), 
 "crates/pragma_sys/src/windows.rs" = { count = 6, decisions = [27] }
 "crates/pragma_sys/src/linux.rs" = { count = 9, decisions = [27] }
 "crates/pragma_graph/tests/alloc.rs" = { count = 9, decisions = [19] }
+"crates/pragma_base/tests/oom.rs" = { count = 7, decisions = [37] }
 
 # Осознанно принятые исключения из правила «никакого C/C++» (DECISIONS.md #7).
 [purity.accepted]
