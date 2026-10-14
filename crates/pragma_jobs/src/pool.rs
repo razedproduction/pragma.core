@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -123,6 +123,45 @@ impl LocalStealers {
     }
 }
 
+/// Запуск воркеров: сколько ещё не закончили инициализацию потока (см. [`ThreadPool::new`]).
+struct Startup {
+    pending: Mutex<usize>,
+    done: Condvar,
+}
+
+impl Startup {
+    fn new(workers: usize) -> Self {
+        Self {
+            pending: Mutex::new(workers),
+            done: Condvar::new(),
+        }
+    }
+
+    fn worker_ready(&self) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        *pending = pending.saturating_sub(1);
+        if *pending == 0 {
+            self.done.notify_all();
+        }
+    }
+
+    /// Ждёт, пока каждый воркер не отметится в [`worker_ready`](Self::worker_ready).
+    fn wait(&self) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        while *pending > 0 {
+            pending = self
+                .done
+                .wait(pending)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    fn pending(&self) -> usize {
+        *self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// Состояние пула, общее для владельца, воркеров и хэндлов.
 pub(crate) struct Shared {
     frame: Injector<Job>,
@@ -155,6 +194,7 @@ pub(crate) struct Shared {
     /// Метрики (см. [`PoolStats`]): по набору на каждый индекс `stealers` и последний — для
     /// внешних потоков без слота.
     counters: CounterSet,
+    startup: Startup,
     #[cfg(debug_assertions)]
     watchdog: Option<Watchdog>,
 }
@@ -919,6 +959,9 @@ fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, setup: Thr
     }
     let ctx = Rc::new(WorkerCtx::new(shared, index, local, false));
     let _ = WORKER.try_with(|cell| cell.set(Some(Rc::clone(&ctx))));
+    // Всё, что поток аллоцирует один раз (хэндл эпохи, контекст, список TLS-деструкторов),
+    // уже выделено: `ThreadPool::new` может вернуть управление (DECISIONS #39).
+    ctx.shared.startup.worker_ready();
     loop {
         if ctx.shared.policy == ShutdownPolicy::Cancel && ctx.shared.is_shutdown() {
             break;
@@ -984,6 +1027,10 @@ impl std::fmt::Debug for ThreadPool {
 impl ThreadPool {
     /// Запускает пул. Потоки называются `<name_prefix>-<index>`.
     ///
+    /// Возвращается, когда каждый воркер закончил инициализацию потока (приоритет и affinity
+    /// применены, одноразовые выделения потока сделаны): первые кадры не платят за запуск
+    /// потоков, даже если воркерам не хватает ядер.
+    ///
     /// Если ОС не дала создать поток, уже запущенные потоки останавливаются и `join`-ятся,
     /// а возвращается [`JobsError::SpawnFailed`].
     pub fn new(config: PoolConfig) -> Result<Self, JobsError> {
@@ -1034,6 +1081,7 @@ impl ThreadPool {
             background_limit: config.background_limit(),
             idle_spin: config.idle_spin(),
             counters,
+            startup: Startup::new(workers),
             #[cfg(debug_assertions)]
             watchdog,
         });
@@ -1060,6 +1108,9 @@ impl ThreadPool {
                 Err(source) => return Err(JobsError::SpawnFailed { name, source }),
             }
         }
+        // Иначе одноразовая инициализация воркера, которому под переподпиской не досталось
+        // ядра, случилась бы посреди первых кадров (DECISIONS #39).
+        pool.shared.startup.wait();
         #[cfg(debug_assertions)]
         pool.start_watchdog(config.name_prefix());
         Ok(pool)
@@ -1157,6 +1208,22 @@ impl Drop for ThreadPool {
         }
         if joined_all || self.shared.policy == ShutdownPolicy::Cancel {
             self.shared.drain_queues();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Воркеры, которым не хватило ядер (больше воркеров, чем ядер), к возврату `new` уже
+    /// инициализированы: их одноразовые выделения не попадают в первые кадры.
+    #[test]
+    fn new_returns_after_every_worker_is_initialized() {
+        let workers = thread::available_parallelism().map_or(4, |n| n.get().saturating_mul(2));
+        for _ in 0..20 {
+            let pool = ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap();
+            assert_eq!(pool.shared.startup.pending(), 0);
         }
     }
 }
