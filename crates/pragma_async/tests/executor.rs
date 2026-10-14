@@ -1,5 +1,5 @@
-//! Поведение исполнителя: результат, паники, отмена на каждом этапе, мост в кадр,
-//! blocking-пул (лимит, переполнение, отмена), остановка пула и исполнителя.
+//! Executor behavior: results, panics, cancellation at every stage, the frame bridge,
+//! the blocking pool (limit, overflow, cancellation), pool and executor shutdown.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -27,7 +27,7 @@ fn setup(workers: usize, config: AsyncConfig) -> (ThreadPool, Executor) {
     (pool, exec)
 }
 
-/// Занимает единственный воркер пула, пока не отпустят `release`.
+/// Occupies the pool's only worker until `release` lets go.
 fn occupy_worker(pool: &ThreadPool) -> (mpsc::Sender<()>, pragma_jobs::JobHandle<()>) {
     let (release, wait) = mpsc::channel::<()>();
     let (started_tx, started) = mpsc::channel();
@@ -79,7 +79,7 @@ fn panic_becomes_error_and_worker_survives() {
             matches!(&err, Err(AsyncError::Panicked { task: "spawn_async", message, .. }) if message == "boom"),
             "{err:?}"
         );
-        // Тот же единственный воркер продолжает исполнять задачи.
+        // The same single worker keeps running tasks.
         assert_eq!(exec.spawn_async(async { 5 }).wait(), Ok(5));
     }
 }
@@ -142,7 +142,7 @@ fn cancel_during_poll_drops_future_after_poll() {
         .await;
     });
     in_poll.recv().unwrap();
-    drop(handle); // future сейчас внутри poll на воркере
+    drop(handle); // the future is inside poll on a worker right now
     assert_eq!(drops.get(), 0);
     go.send(()).unwrap();
     wait_until("future dropped", || drops.get() == 1);
@@ -171,7 +171,7 @@ fn unread_result_is_dropped_with_handle() {
     let token = drops.token();
     let handle = exec.spawn_async(async move { token });
     wait_until("finished", || handle.is_finished());
-    assert_eq!(drops.get(), 0, "результат ещё лежит в задаче");
+    assert_eq!(drops.get(), 0, "the result is still held by the task");
     drop(handle);
     assert_eq!(drops.get(), 1);
 }
@@ -204,11 +204,11 @@ fn handles_compose_with_await() {
 #[test]
 fn wait_inside_pool_work_is_rejected() {
     let (pool, exec) = setup(1, AsyncConfig::default());
-    // Из воркера.
+    // From a worker.
     let handle = exec.spawn_async(future::pending::<()>());
     let job = pool.spawn(Priority::Normal, move || handle.wait());
     assert_eq!(job.join().unwrap(), Err(AsyncError::WouldBlock));
-    // Из главного потока во время `scope` (как в кадре графа).
+    // From the main thread during a `scope` (as in a graph frame).
     let handle = exec.spawn_async(async { 1 });
     let result = pool.scope(|_| handle.wait()).unwrap();
     assert_eq!(result, Err(AsyncError::WouldBlock));
@@ -245,8 +245,8 @@ fn pool_shutdown_cancels_waiting_tasks_without_hang() {
     started.recv().unwrap();
     drop(pool);
     assert!(!exec.is_alive());
-    // Blocking-задача завершается после остановки пула и будит async-задачу: пул её уже не
-    // примет, задача отменяется, ожидающий не виснет.
+    // The blocking task finishes after the pool has stopped and wakes the async task: the pool will
+    // not accept it anymore, the task is cancelled, and the waiter does not hang.
     go.send(()).unwrap();
     assert_eq!(handle.wait(), Err(AsyncError::Cancelled));
     assert_eq!(drops.get(), 1);
@@ -322,14 +322,14 @@ fn blocking_overflow_is_rejected_immediately() {
     ));
     assert!(
         start.elapsed() < Duration::from_secs(1),
-        "переполнение не ждёт"
+        "overflow does not wait"
     );
     go.send(()).unwrap();
     go.send(()).unwrap();
     for h in busy {
         assert_eq!(h.wait(), Ok(true));
     }
-    // Слоты освобождены.
+    // The slots have been released.
     assert_eq!(exec.unblock(|| 1).wait(), Ok(1));
 }
 
@@ -339,7 +339,7 @@ fn blocking_work_does_not_occupy_pool_workers() {
     let (pool, exec) = setup(1, config);
     let (go, go_rx) = mpsc::channel::<()>();
     let io = exec.unblock(move || go_rx.recv().is_ok());
-    // Пока blocking-поток занят, единственный воркер пула свободен для кадра и async.
+    // While the blocking thread is busy, the pool's only worker is free for the frame and async work.
     assert_eq!(pool.join(|| 1, || 2).unwrap(), (1, 2));
     assert_eq!(pool.spawn(Priority::Normal, || 3).join(), Ok(3));
     assert_eq!(exec.spawn_async(async { 4 }).wait(), Ok(4));
@@ -366,7 +366,7 @@ fn blocking_cancel_before_start_skips_closure() {
     assert_eq!(first.wait(), Ok(true));
     wait_until("closure dropped", || drops.get() == 1);
     assert!(!ran.load(Ordering::SeqCst));
-    // Отменённая задача вернула свой слот.
+    // The cancelled task returned its slot.
     assert_eq!(exec.unblock(|| 2).wait(), Ok(2));
 }
 
@@ -388,7 +388,7 @@ fn executor_drop_cancels_queued_blocking_tasks() {
         std::thread::sleep(Duration::from_millis(20));
         go.send(()).unwrap();
     });
-    drop(exec); // дожидается выполняющейся задачи, очередь — отменяет
+    drop(exec); // waits for the running task, cancels the queued ones
     releaser.join().unwrap();
     assert_eq!(first.wait(), Ok(true));
     assert_eq!(queued.wait(), Err(AsyncError::Cancelled));

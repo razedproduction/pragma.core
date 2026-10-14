@@ -1,51 +1,51 @@
 use std::any::Any;
 
-/// Ошибки async-задач и исполнителя.
+/// Errors of async tasks and the executor.
 ///
-/// `Clone`/`PartialEq`, как и `JobError`: исход задачи пересылают между потоками и сравнивают.
+/// `Clone`/`PartialEq`, like `JobError`: task outcomes are sent between threads and compared.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AsyncError {
-    /// Задача отменена до завершения: сброшен её хэндл, пул или исполнитель остановлен.
+    /// The task was cancelled before completion: its handle was dropped, or the pool or executor stopped.
     #[error("task was cancelled")]
     Cancelled,
-    /// Задача запаниковала; паника перехвачена и не уронила воркер.
+    /// The task panicked; the panic was caught and did not bring the worker down.
     #[error("task `{task}` panicked: {message}")]
     #[non_exhaustive]
     Panicked {
-        /// Какая задача: `spawn_async` или `unblock`.
+        /// Which task: `spawn_async` or `unblock`.
         task: &'static str,
-        /// Сообщение паники, если оно было строкой.
+        /// The panic message, if it was a string.
         message: String,
     },
-    /// Blocking-пул переполнен: задача не принята, вызывающий не ждал.
+    /// The blocking pool is full: the task was not accepted, and the caller did not wait.
     #[error("blocking pool is full ({capacity} pending tasks)")]
     #[non_exhaustive]
     Overloaded {
-        /// Лимит одновременно поставленных blocking-задач.
+        /// The limit on simultaneously queued blocking tasks.
         capacity: usize,
     },
-    /// ОС не дала создать поток blocking-пула, а свободных потоков нет.
+    /// The OS refused to create a blocking pool thread, and there are no free threads.
     #[error("failed to spawn blocking thread `{thread}`: {message}")]
     #[non_exhaustive]
     SpawnFailed {
-        /// Имя потока.
+        /// Thread name.
         thread: String,
-        /// Текст ошибки ОС (`std::io::Error` не `Clone`).
+        /// The OS error text (`std::io::Error` is not `Clone`).
         message: String,
     },
-    /// Блокирующее ожидание вызвано из работы пула (воркер или кадр графа): оно задержало бы
-    /// кадр или повесило пул. Используйте `poll_ready` или `.await`.
+    /// A blocking wait was called from pool work (a worker or a graph frame): it would delay
+    /// the frame or hang the pool. Use `poll_ready` or `.await`.
     #[error("blocking wait inside pool work is not allowed; use poll_ready() or .await")]
     WouldBlock,
-    /// Результат уже забран из хэндла.
+    /// The result has already been taken from the handle.
     #[error("task result was already taken")]
     Consumed,
-    /// Некорректная конфигурация исполнителя.
+    /// Invalid executor configuration.
     #[error("invalid async config: {reason}")]
     #[non_exhaustive]
     InvalidConfig {
-        /// Что именно не так.
+        /// What exactly is wrong.
         reason: &'static str,
     },
 }

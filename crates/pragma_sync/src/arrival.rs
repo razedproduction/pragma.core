@@ -1,14 +1,14 @@
 use crate::primitives::{AtomicUsize, Ordering};
 
-/// Счётчик «ждём N прибытий»: последний пришедший узнаёт, что можно продолжать.
+/// A "wait for N arrivals" counter: the last one to arrive learns that work may proceed.
 ///
-/// Основа dataflow-исполнения графа кадра: у задачи столько прибытий, сколько у неё
-/// предшественников; предшественник, прибывший последним, запускает её. Прибытие — RMW с
-/// `AcqRel`, поэтому последний прибывший видит всё, что сделали остальные до своего прибытия
-/// (loom-модель в `tests/loom.rs`).
+/// The basis of dataflow execution of the frame graph: a task has as many arrivals as it has
+/// predecessors; the predecessor that arrives last launches it. An arrival is an RMW with
+/// `AcqRel`, so the last arriver sees everything the others did before their arrival
+/// (loom model in `tests/loom.rs`).
 ///
-/// В отличие от [`AtomicCounter`](crate::AtomicCounter), ждать на нём нельзя — и не нужно:
-/// никто не блокируется, нет мьютекса и `Condvar`, только один атомик.
+/// Unlike [`AtomicCounter`](crate::AtomicCounter), it cannot be waited on, and it need not be:
+/// nobody blocks, there is no mutex and no `Condvar`, just one atomic.
 #[derive(Debug)]
 pub struct ArrivalCounter {
     remaining: AtomicUsize,
@@ -21,7 +21,7 @@ impl Default for ArrivalCounter {
 }
 
 impl ArrivalCounter {
-    /// Счётчик на `expected` прибытий.
+    /// A counter for `expected` arrivals.
     #[must_use]
     pub fn new(expected: usize) -> Self {
         Self {
@@ -29,14 +29,14 @@ impl ArrivalCounter {
         }
     }
 
-    /// Готовит счётчик к новому раунду. `&mut` гарантирует, что прибытий прошлого раунда
-    /// в этот момент нет; новый раунд другим потокам публикует тот, кто отдаёт им работу.
+    /// Prepares the counter for a new round. `&mut` guarantees there are no arrivals of the previous
+    /// round at this moment; the new round is published to other threads by whoever hands them work.
     pub fn reset(&mut self, expected: usize) {
         self.remaining.store(expected, Ordering::Relaxed);
     }
 
-    /// Регистрирует прибытие; `true` — оно последнее. Лишнее прибытие (на нуле) — ошибка
-    /// вызывающего: ничего не меняет и возвращает `false`, а не заворачивается.
+    /// Registers an arrival; `true` means it is the last one. An extra arrival (at zero) is a caller
+    /// bug: it changes nothing and returns `false` instead of wrapping around.
     pub fn arrive(&self) -> bool {
         let mut current = self.remaining.load(Ordering::Relaxed);
         loop {
@@ -56,7 +56,7 @@ impl ArrivalCounter {
         }
     }
 
-    /// Сколько прибытий ещё ждём.
+    /// How many arrivals are still expected.
     #[must_use]
     pub fn remaining(&self) -> usize {
         self.remaining.load(Ordering::Acquire)

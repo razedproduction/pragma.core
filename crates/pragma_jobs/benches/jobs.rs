@@ -1,6 +1,6 @@
-//! Бенчмарки job system против `rayon` на пулах одинакового размера.
+//! Benchmarks of the job system against `rayon` on pools of the same size.
 //!
-//! `cargo bench -p pragma_jobs` (отчёт — `target/criterion/report/index.html`).
+//! `cargo bench -p pragma_jobs` (report: `target/criterion/report/index.html`).
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -56,8 +56,8 @@ fn bench_join(c: &mut Criterion) {
     g.bench_function("rayon/single", |b| {
         b.iter(|| rayon.install(|| rayon::join(|| black_box(1), || black_box(2))));
     });
-    // Рекурсивный fork-join: ~11k вложенных join. В pragma главный поток сам участвует
-    // в работе, в rayon — вызов через install.
+    // Recursive fork-join: ~11k nested joins. In pragma the main thread takes part in the
+    // work itself; in rayon the call goes through install.
     g.bench_function("pragma/fib20", |b| {
         b.iter(|| black_box(pragma_fib(&pragma, 20)));
     });

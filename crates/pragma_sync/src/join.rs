@@ -1,12 +1,12 @@
-//! Fork-join без аллокаций и без `Arc`: вторая ветвь `join` — кадр на стеке владельца с
-//! латчем (DECISIONS #30).
+//! Fork-join without allocations and without `Arc`: the second branch of `join` is a frame on the
+//! owner's stack with a latch (DECISIONS #30).
 //!
-//! Владелец кладёт [`StackJob`] в свою очередь, исполняет первую ветвь и забирает задачу
-//! обратно. Не украденную задачу он исполняет сам ([`StackJob::run_inline`]) — ни одной
-//! атомарной RMW. Украденную исполняет вор ([`StackJob::run`]): записывает результат и
-//! ставит латч одним `swap`; если владелец к этому моменту собрался спать
-//! ([`JoinLatch::prepare_park`]), `run` возвращает индекс владельца — разбудить его должен
-//! вызывающий. После `swap` вор память кадра не трогает: владелец может сразу вернуться.
+//! The owner pushes a [`StackJob`] into its queue, runs the first branch and takes the job
+//! back. A job that was not stolen the owner runs itself ([`StackJob::run_inline`]), with no
+//! atomic RMW at all. A stolen job is run by the thief ([`StackJob::run`]): it writes the result and
+//! sets the latch with a single `swap`; if by then the owner has decided to sleep
+//! ([`JoinLatch::prepare_park`]), `run` returns the owner's index and the caller must wake it.
+//! After the `swap` the thief does not touch the frame's memory: the owner may return right away.
 
 use std::cell::UnsafeCell;
 use std::panic::{self, AssertUnwindSafe};
@@ -15,48 +15,48 @@ use std::{fmt, ptr, thread};
 use crate::primitives::{AtomicUsize, Ordering};
 
 const PENDING: usize = 0;
-/// Владелец собирается спать: исполнитель должен его разбудить.
+/// The owner is about to sleep: the executor must wake it.
 const SLEEPY: usize = 1;
 const SET: usize = 2;
 
-/// Индекс владельца, которого некому будить (у него нет парковщика): `run` никогда не
-/// вернёт его, владелец перепроверяет латч сам.
+/// Index of an owner that nobody can wake (it has no parker): `run` never
+/// returns it, and the owner rechecks the latch by itself.
 pub const NO_OWNER: usize = usize::MAX;
 
-/// Кадр второй ветви на стеке [`join_on_stack`].
+/// The frame of the second branch on the stack of [`join_on_stack`].
 struct Frame<F, R> {
     latch: AtomicUsize,
     owner: usize,
-    /// Читает и пишет только исполнитель задачи (он один — задача не клонируется).
+    /// Read and written only by the job's executor (there is exactly one: the job is not cloned).
     f: UnsafeCell<Option<F>>,
-    /// Пишет исполнитель до установки латча, читает владелец после.
+    /// Written by the executor before the latch is set, read by the owner after.
     result: UnsafeCell<Option<thread::Result<R>>>,
 }
 
 #[derive(Clone, Copy)]
 enum Mode {
-    /// Исполняет владелец — латч ставится обычной записью.
+    /// Run by the owner: the latch is set with a plain store.
     Owner,
-    /// Исполняет другой поток.
+    /// Run by another thread.
     Thief,
-    /// Задача сброшена без выполнения.
+    /// The job is dropped without running.
     Cancel,
 }
 
-/// Вторая ветвь `join` со стёртым типом и лайфтаймом: её можно положить в `'static`-очередь.
+/// The second branch of `join` with its type and lifetime erased, so it can go into a `'static` queue.
 ///
-/// Исполняется через [`run`](Self::run) или [`run_inline`](Self::run_inline); сброс без
-/// выполнения тоже ставит латч, поэтому владелец не зависнет. Утечка через `mem::forget`
-/// безопасна, но подвесит владельца навсегда.
+/// It is run via [`run`](Self::run) or [`run_inline`](Self::run_inline); dropping it without
+/// running also sets the latch, so the owner will not hang. Leaking it via `mem::forget`
+/// is safe but hangs the owner forever.
 pub struct StackJob {
     frame: *const (),
-    /// Мономорфизированный `call::<F, R>`.
+    /// The monomorphized `call::<F, R>`.
     call: unsafe fn(*const (), Mode) -> Option<usize>,
     pending: bool,
 }
 
-// SAFETY: кадр требует `F: Send` и `R: Send` (см. `join_on_stack`); перенос задачи в другой
-// поток передаёт туда единственный доступ к замыканию и слоту результата, а латч — атомик.
+// SAFETY: the frame requires `F: Send` and `R: Send` (see `join_on_stack`); moving the job to another
+// thread hands over the sole access to the closure and the result slot, and the latch is an atomic.
 unsafe impl Send for StackJob {}
 
 impl fmt::Debug for StackJob {
@@ -69,28 +69,28 @@ impl fmt::Debug for StackJob {
 }
 
 impl StackJob {
-    /// Идентификатор задачи (адрес кадра): по нему владелец узнаёт свою задачу в очереди.
+    /// The job identifier (the frame address): the owner recognizes its job in the queue by it.
     #[must_use]
     pub fn id(&self) -> usize {
         self.frame.addr()
     }
 
-    /// Исполняет задачу на чужом потоке. Паника замыкания перехватывается и передаётся
-    /// владельцу как результат. Возвращает индекс владельца, если его нужно разбудить.
-    #[must_use = "владельца, собравшегося спать, нужно разбудить"]
+    /// Runs the job on a foreign thread. A panic of the closure is caught and handed to the
+    /// owner as the result. Returns the owner's index if it has to be woken.
+    #[must_use = "an owner that is about to sleep must be woken"]
     pub fn run(mut self) -> Option<usize> {
         self.pending = false;
-        // SAFETY: `frame` и `call` созданы в `join_on_stack` для одного кадра; кадр жив, пока
-        // латч не поставлен (владелец ждёт его), а `pending` гарантирует однократный вызов.
+        // SAFETY: `frame` and `call` were created in `join_on_stack` for the same frame; the frame is
+        // alive until the latch is set (the owner waits for it), and `pending` guarantees a single call.
         unsafe { (self.call)(self.frame, Mode::Thief) }
     }
 
-    /// Исполняет задачу на потоке владельца (вызвавшего [`join_on_stack`]) — без атомарных
-    /// RMW. С другого потока корректно, но не разбудит спящего владельца (тот проснётся по
-    /// таймауту своей парковки).
+    /// Runs the job on the owner's thread (the one that called [`join_on_stack`]) with no atomic
+    /// RMW. Correct from another thread too, but it will not wake a sleeping owner (that one wakes
+    /// up on its parking timeout).
     pub fn run_inline(mut self) {
         self.pending = false;
-        // SAFETY: см. `run`.
+        // SAFETY: see `run`.
         let _ = unsafe { (self.call)(self.frame, Mode::Owner) };
     }
 }
@@ -99,33 +99,33 @@ impl Drop for StackJob {
     fn drop(&mut self) {
         if self.pending {
             self.pending = false;
-            // SAFETY: см. `run`. Будить владельца отсюда нечем: он проснётся по таймауту.
+            // SAFETY: see `run`. There is nothing to wake the owner with here: it wakes up on its timeout.
             let _ = unsafe { (self.call)(self.frame, Mode::Cancel) };
         }
     }
 }
 
-/// Исполняет (или сбрасывает) замыкание кадра и ставит латч.
+/// Runs (or drops) the frame's closure and sets the latch.
 ///
 /// # Safety
-/// `ptr` — указатель на живой `Frame<F, R>`, вызов для этого кадра — первый и единственный.
+/// `ptr` points to a live `Frame<F, R>`, and this is the first and only call for that frame.
 unsafe fn call<F: FnOnce() -> R, R>(ptr: *const (), mode: Mode) -> Option<usize> {
-    // SAFETY: по контракту функции.
+    // SAFETY: by the function's contract.
     let frame = unsafe { &*ptr.cast::<Frame<F, R>>() };
-    // Читаем до установки латча: после неё кадр может быть уже уничтожен.
+    // Read before setting the latch: after that the frame may already be gone.
     let owner = frame.owner;
-    // SAFETY: к `f` обращается только этот (единственный) вызов.
+    // SAFETY: only this (single) call accesses `f`.
     let f = unsafe { (*frame.f.get()).take() };
     match (mode, f) {
         (Mode::Cancel, f) => {
-            // Деструктор захваченного — пользовательский код: его паника не должна
-            // вырваться мимо латча.
+            // The destructor of the captured state is user code: its panic must not
+            // escape past the latch.
             let _ = panic::catch_unwind(AssertUnwindSafe(|| drop(f)));
         }
         (_, Some(f)) => {
             let result = panic::catch_unwind(AssertUnwindSafe(f));
-            // SAFETY: владелец читает `result` только после того, как увидит латч (ниже);
-            // других писателей нет.
+            // SAFETY: the owner reads `result` only after it sees the latch (below);
+            // there are no other writers.
             unsafe { *frame.result.get() = Some(result) };
         }
         (_, None) => {}
@@ -142,25 +142,25 @@ unsafe fn call<F: FnOnce() -> R, R>(ptr: *const (), mode: Mode) -> Option<usize>
     }
 }
 
-/// Латч второй ветви — для шага ожидания владельца (см. [`join_on_stack`]).
+/// The latch of the second branch, for the owner's wait step (see [`join_on_stack`]).
 #[derive(Debug)]
 pub struct JoinLatch<'a> {
     state: &'a AtomicUsize,
 }
 
 impl JoinLatch<'_> {
-    /// Вторая ветвь завершена (или сброшена).
+    /// Whether the second branch has finished (or was dropped).
     #[must_use]
     pub fn is_set(&self) -> bool {
         self.state.load(Ordering::Acquire) == SET
     }
 
-    /// Объявляет, что владелец собирается спать на своём парковщике. `true` — можно
-    /// парковаться: исполнитель вернёт из [`StackJob::run`] индекс владельца, чтобы его
-    /// разбудили; `false` — латч уже поставлен, спать не нужно.
+    /// Announces that the owner is about to sleep on its parker. `true`: it may park, and the
+    /// executor will return the owner's index from [`StackJob::run`] so that it gets woken;
+    /// `false`: the latch is already set, no need to sleep.
     ///
-    /// Пробуждение не теряется: и объявление, и установка латча — RMW одного атомика, поэтому
-    /// либо исполнитель видит `SLEEPY` и будит, либо владелец видит `SET` (loom-модель).
+    /// A wakeup is never lost: both the announcement and setting the latch are RMWs on one atomic, so
+    /// either the executor sees `SLEEPY` and wakes the owner, or the owner sees `SET` (loom model).
     #[must_use]
     pub fn prepare_park(&self) -> bool {
         match self
@@ -173,18 +173,18 @@ impl JoinLatch<'_> {
     }
 }
 
-/// Fork-join: создаёт на стеке задачу для `b` и передаёт её в `body`.
+/// Fork-join: creates a job for `b` on the stack and passes it to `body`.
 ///
-/// `body` кладёт задачу в очередь (её исполнят [`StackJob::run`] или, если владелец заберёт
-/// её обратно, [`StackJob::run_inline`]), исполняет первую ветвь и возвращает её результат.
-/// После `body` функция ждёт латч, вызывая `wait` (шаг help-while-wait: исполнить чужую
-/// задачу, покрутиться или уснуть после [`JoinLatch::prepare_park`]), и возвращает результат
-/// `body` и `b`: `None` — задача сброшена без выполнения, `Some(Err(_))` — `b` запаниковала.
+/// `body` pushes the job into a queue (it will be run by [`StackJob::run`] or, if the owner takes
+/// it back, by [`StackJob::run_inline`]), runs the first branch and returns its result.
+/// After `body` the function waits for the latch, calling `wait` (a help-while-wait step: run
+/// someone else's task, spin, or sleep after [`JoinLatch::prepare_park`]), and returns the results of
+/// `body` and `b`: `None` means the job was dropped without running, `Some(Err(_))` means `b` panicked.
 ///
-/// Паника в `body` пробрасывается после того, как задача завершена. Паника в `wait` приводит
-/// к `abort`: продолжать раскрутку, пока задача ссылается на стек, нельзя.
+/// A panic in `body` is propagated after the job has finished. A panic in `wait` leads
+/// to `abort`: unwinding cannot continue while the job references the stack.
 ///
-/// `owner` — индекс владельца для пробуждения (или [`NO_OWNER`]).
+/// `owner` is the owner's index for wakeups (or [`NO_OWNER`]).
 ///
 /// ```
 /// use pragma_sync::__private::{NO_OWNER, join_on_stack};
@@ -194,10 +194,10 @@ impl JoinLatch<'_> {
 ///     NO_OWNER,
 ///     || (1..=10_u64).sum::<u64>(),
 ///     |job| {
-///         sum = 100;          // первая ветвь
-///         job.run_inline();   // никто не украл — исполняем сами
+///         sum = 100;          // first branch
+///         job.run_inline();   // nobody stole it, so run it ourselves
 ///     },
-///     |_latch| unreachable!("латч уже поставлен"),
+///     |_latch| unreachable!("the latch is already set"),
 /// );
 /// assert_eq!((sum, b.and_then(Result::ok)), (100, Some(55)));
 /// ```
@@ -217,9 +217,9 @@ where
         f: UnsafeCell::new(Some(b)),
         result: UnsafeCell::new(None),
     };
-    // SAFETY-инвариант (используется в `StackJob`): кадр не перемещается и живёт до конца
-    // функции, а функция не возвращается (ни нормально, ни паникой), пока латч не поставлен —
-    // после этого исполнитель кадр не трогает.
+    // SAFETY invariant (relied upon by `StackJob`): the frame does not move and lives until the end
+    // of the function, and the function does not return (neither normally nor by panic) until the
+    // latch is set; after that the executor does not touch the frame.
     let job = StackJob {
         frame: ptr::from_ref(&frame).cast::<()>(),
         call: call::<B, RB>,
@@ -287,7 +287,7 @@ mod tests {
             |_| std::thread::yield_now(),
         );
         assert_eq!(b.and_then(Result::ok), Some(8));
-        // Владелец не объявлял сон — будить некого.
+        // The owner never announced sleep, so there is nobody to wake.
         assert_eq!(thief.join().unwrap(), None);
     }
 

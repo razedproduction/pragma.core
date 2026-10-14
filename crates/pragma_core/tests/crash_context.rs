@@ -1,8 +1,8 @@
-//! Контекст задачи для крэш-репортов (M4): panic hook называет виновника — задачу графа,
-//! `spawn`, async-задачу или blocking-замыкание.
+//! Task context for crash reports (M4): the panic hook names the culprit: a graph task,
+//! a `spawn`, an async task or a blocking closure.
 //!
-//! Один тест на бинарник: panic hook глобальный.
-// Тестовый код: паника = провал теста.
+//! One test per binary: the panic hook is global.
+// Test code: a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::panic;
@@ -10,7 +10,7 @@ use std::sync::{Mutex, PoisonError};
 
 use pragma_core::prelude::*;
 
-/// Что увидел hook: метка задачи (цепочка) и сообщение паники.
+/// What the hook saw: the task label (chain) and the panic message.
 static SEEN: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 fn seen_for(message: &str) -> Option<String> {
@@ -39,7 +39,7 @@ fn panic_hook_names_the_culprit() {
 
     let pool = ThreadPool::new(PoolConfig::default().with_workers(2)).unwrap();
 
-    // Задача графа.
+    // A graph task.
     let mut g = FrameGraph::builder();
     g.task(
         "physics",
@@ -49,13 +49,13 @@ fn panic_hook_names_the_culprit() {
     let mut graph = g.build().unwrap();
     assert!(graph.run(&pool, &mut Resources::new()).is_err());
 
-    // `spawn` с именем.
+    // A named `spawn`.
     let spawned = pool.spawn_named("bake-navmesh", Priority::Background, || -> u32 {
         panic!("spawned task exploded")
     });
     assert!(spawned.join().is_err());
 
-    // Async-задача и blocking-замыкание.
+    // An async task and a blocking closure.
     let exec = Executor::new(&pool, AsyncConfig::default()).unwrap();
     let failed = exec
         .spawn_async_named("load-level", async { panic!("async task exploded") })

@@ -1,19 +1,19 @@
-//! L1: примитивы синхронизации для планировщика `pragma.core`.
+//! L1: synchronization primitives for the `pragma.core` scheduler.
 //!
-//! Единственный крейт workspace, где допускается `unsafe` (см. `layers.toml`,
-//! `DECISIONS.md` #6). Правила: каждый блок с комментарием `// SAFETY:`,
-//! тесты под `cargo +nightly miri test -p pragma_sync`, атомарные протоколы —
-//! модель-чекинг через `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests`.
+//! The only workspace crate where `unsafe` is allowed (see `layers.toml`,
+//! `DECISIONS.md` #6). Rules: every block carries a `// SAFETY:` comment,
+//! tests run under `cargo +nightly miri test -p pragma_sync`, and atomic protocols are
+//! model-checked via `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests`.
 //!
-//! | Примитив | Для чего |
+//! | Primitive | Purpose |
 //! |---|---|
-//! | [`CountLatch`] | Ждать N событий |
-//! | [`AtomicCounter`] | Счётчик задач группы; ждать нуля, помогая исполнять работу |
-//! | [`current_label`] / [`TaskLabel`] | Метка задачи потока для panic hook и крэш-репортов |
+//! | [`CountLatch`] | Wait for N events |
+//! | [`AtomicCounter`] | Task counter of a group; wait for zero while helping to run work |
+//! | [`current_label`] / [`TaskLabel`] | The thread's task label for the panic hook and crash reports |
 //!
-//! Строительные блоки планировщика (`ArrivalCounter`, `Parker`, `scope`, `join_on_stack`,
-//! `run_labeled` и др.) лежат в скрытом модуле `__private`: их использует `pragma_jobs`, они
-//! меняются вместе с ним и **не входят в гарантии semver** (DECISIONS #42).
+//! Scheduler building blocks (`ArrivalCounter`, `Parker`, `scope`, `join_on_stack`,
+//! `run_labeled` and others) live in the hidden module `__private`: `pragma_jobs` uses them, they
+//! change together with it and are **not covered by semver guarantees** (DECISIONS #42).
 //!
 //! ```
 //! use pragma_sync::{AtomicCounter, CountLatch};
@@ -32,8 +32,8 @@
 //!
 //! let pending = AtomicCounter::new(0);
 //! pending.increment()?;
-//! assert!(pending.decrement()); // стал нулём
-//! pending.wait(); // возвращается сразу
+//! assert!(pending.decrement()); // reached zero
+//! pending.wait(); // returns immediately
 //! # Ok::<(), pragma_sync::SyncError>(())
 //! ```
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -54,9 +54,9 @@ pub use error::SyncError;
 pub use label::{TaskLabel, current_label};
 pub use latch::CountLatch;
 
-/// Внутренности планировщика для крейтов `pragma.core`. **Не входят в гарантии semver**:
-/// меняются в любом релизе вместе с `pragma_jobs`, который зависит от этого крейта точной
-/// версией (DECISIONS #42).
+/// Scheduler internals for the `pragma.core` crates. **Not covered by semver guarantees**:
+/// they change in any release together with `pragma_jobs`, which depends on this crate with an exact
+/// version (DECISIONS #42).
 #[doc(hidden)]
 pub mod __private {
     pub use crate::arrival::ArrivalCounter;

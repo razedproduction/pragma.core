@@ -1,28 +1,28 @@
 use crate::BaseError;
 
-/// Номер тика фиксированного шага симуляции.
+/// Tick number of the fixed simulation step.
 ///
-/// Симуляция оперирует тиками, а не `Instant::now()` — это основа детерминизма и реплеев.
+/// The simulation works in ticks rather than `Instant::now()`; this is the basis of determinism and replays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Tick(u64);
 
 impl Tick {
-    /// Нулевой тик.
+    /// The zero tick.
     pub const ZERO: Self = Self(0);
 
-    /// Создаёт тик с заданным номером.
+    /// Creates a tick with the given number.
     #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
-    /// Номер тика.
+    /// The tick number.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
-    /// Следующий тик; ошибка при переполнении вместо тихого заворачивания.
+    /// The next tick; an error on overflow instead of silently wrapping.
     pub fn next(self) -> Result<Self, BaseError> {
         self.0
             .checked_add(1)

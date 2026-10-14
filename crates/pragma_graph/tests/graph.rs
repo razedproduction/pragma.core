@@ -1,5 +1,5 @@
-//! РџРѕРІРµРґРµРЅРёРµ РіСЂР°С„Р° РєР°РґСЂР°: РїРѕСЂСЏРґРѕРє, РѕС€РёР±РєРё, РїР°РЅРёРєРё, РІР»РѕР¶РµРЅРЅС‹Р№ РїР°СЂР°Р»Р»РµР»РёР·Рј, СЌРєСЃРїРѕСЂС‚.
-// РўРµСЃС‚РѕРІС‹Р№ РєРѕРґ: РїР°РЅРёРєР° = РїСЂРѕРІР°Р» С‚РµСЃС‚Р°, РїРµСЂРµРїРѕР»РЅРµРЅРёРµ РёСЃРєР»СЋС‡РµРЅРѕ СЂР°Р·РјРµСЂР°РјРё РІС…РѕРґР°.
+//! Frame graph behavior: order, errors, panics, nested parallelism, export.
+// Test code: a panic is a test failure; overflow is ruled out by the input sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -37,7 +37,7 @@ fn position(log: &[&str], name: &str) -> usize {
     log.iter().position(|n| *n == name).unwrap()
 }
 
-/// РџСЂРёРјРµСЂ РёР· `docs/architecture.md` В§3.3.
+/// The example from `docs/architecture.md` §3.3.
 fn frame() -> (FrameGraph, Resources) {
     let mut g = FrameGraph::builder();
     g.task(
@@ -103,7 +103,7 @@ fn architecture_example_runs_every_frame() {
         for _ in 0..10 {
             graph.run(&pool, &mut res).unwrap();
         }
-        // РљР°РґСЂ k РґРѕР±Р°РІР»СЏРµС‚ k Рє РєР°Р¶РґРѕРјСѓ С‚РµР»Сѓ: 1 + 2 + вЂ¦ + 10 = 55.
+        // Frame k adds k to every body: 1 + 2 + … + 10 = 55.
         assert_eq!(res.get::<Bodies>().unwrap().0, vec![55; 100]);
         assert_eq!(res.get::<Audio>().unwrap().0, 55 * 2 * 100);
     }
@@ -260,7 +260,7 @@ fn undeclared_and_double_borrows_are_errors() {
     let mut res = Resources::new();
     res.insert(Input(0));
     res.insert(Audio(0));
-    // РћС€РёР±РєР° Р·Р°РґР°С‡Рё СЃ РЅР°РёРјРµРЅСЊС€РёРј РёРЅРґРµРєСЃРѕРј СЂРµРіРёСЃС‚СЂР°С†РёРё.
+    // The error of the task with the lowest registration index.
     let err = graph.run(&pool(2), &mut res).unwrap_err();
     assert!(
         matches!(&err, GraphError::UndeclaredAccess { task, resource, access: "write", .. }
@@ -321,7 +321,7 @@ fn failure_skips_dependents_but_not_independent_tasks() {
         for _ in 0..20 {
             log.lock().unwrap().clear();
             let err = graph.run(&pool, &mut res).unwrap_err();
-            // `boom` Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅР° СЂР°РЅСЊС€Рµ `panics`: РІС‹Р±РѕСЂ РѕС€РёР±РєРё РЅРµ Р·Р°РІРёСЃРёС‚ РѕС‚ СЂР°СЃРїРёСЃР°РЅРёСЏ.
+            // `boom` is registered before `panics`: which error wins does not depend on scheduling.
             assert!(
                 matches!(&err, GraphError::TaskFailed { task, message, .. }
                     if task == "boom" && message == "disk on fire"),
@@ -355,7 +355,7 @@ fn panic_is_reported_with_task_name_and_pool_survives() {
             if task == "panics" && message == "bad frame"),
         "{err:?}"
     );
-    // РћС‚СЂР°РІР»РµРЅРЅС‹Р№ РїР°РЅРёРєРѕР№ СЃР»РѕС‚ РѕСЃС‚Р°С‘С‚СЃСЏ РґРѕСЃС‚СѓРїРЅС‹Рј, РїСѓР» Р¶РёРІ.
+    // A slot poisoned by the panic stays accessible, and the pool is alive.
     assert_eq!(res.get::<Input>().unwrap().0, 0);
     assert_eq!(pool.join(|| 1, || 2).unwrap(), (1, 2));
 }
@@ -424,7 +424,7 @@ fn wide_graph_on_one_worker() {
             format!("leaf{i}"),
             |t| t.after("root"),
             move |ctx: &TaskContext<'_>| {
-                // Р’Р»РѕР¶РµРЅРЅС‹Р№ РїР°СЂР°Р»Р»РµР»РёР·Рј РёР· Р·Р°РґР°С‡Рё РіСЂР°С„Р° РЅР° РѕРґРЅРѕРј РІРѕСЂРєРµСЂРµ РЅРµ РґРµРґР»РѕС‡РёС‚.
+                // Nested parallelism from a graph task on a single worker does not deadlock.
                 let (a, b) = ctx.pool().join(|| 1, || 2).unwrap();
                 count.fetch_add(a + b, Ordering::Relaxed);
             },

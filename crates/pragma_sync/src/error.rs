@@ -1,8 +1,8 @@
-/// Ошибки примитивов синхронизации.
+/// Errors of the synchronization primitives.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
-    /// Счётчик [`AtomicCounter`](crate::AtomicCounter) достиг `usize::MAX`.
+    /// The [`AtomicCounter`](crate::AtomicCounter) reached `usize::MAX`.
     #[error("atomic counter overflow")]
     CounterOverflow,
 }

@@ -1,10 +1,10 @@
-//! Набор для Miri (M5): пул в однопоточной конфигурации (1 воркер + внешний поток) проходит
-//! через весь `unsafe` из `pragma_sync`, на котором стоит `pragma_jobs`: `join_on_stack`
-//! (владелец и вор), `StackSlot`/стирание лайфтайма `scope`, кадр метки задачи.
+//! The Miri suite (M5): a pool in a minimal configuration (1 worker + an external thread) goes
+//! through all the `unsafe` in `pragma_sync` that `pragma_jobs` relies on: `join_on_stack`
+//! (owner and thief), `StackSlot`/`scope` lifetime erasure, the task label frame.
 //!
-//! `cargo +nightly miri test -p pragma_jobs --test miri` (CI, Linux). Размеры малы: Miri
-//! медленнее нативного кода в тысячи раз. Обычный `cargo test` гоняет тот же набор.
-// Тестовый код: паника = провал теста.
+//! `cargo +nightly miri test -p pragma_jobs --test miri` (CI, Linux). Sizes are small: Miri
+//! is thousands of times slower than native code. A regular `cargo test` runs the same suite.
+// Test code: a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +12,7 @@ use std::sync::{Arc, mpsc};
 
 use pragma_jobs::{Grain, JobError, PoolConfig, Priority, ThreadPool, current_task, labeled};
 
-/// 1 воркер, без watchdog (поток с таймерами Miri не нужен) и с коротким spin.
+/// 1 worker, no watchdog (Miri does not need a thread with timers) and a short spin.
 fn pool() -> ThreadPool {
     ThreadPool::new(
         PoolConfig::default()
@@ -39,13 +39,13 @@ fn nested_join_from_external_thread() {
 
 #[test]
 fn nested_join_on_worker_while_external_thread_helps() {
-    // Задача на воркере делает join, а главный поток ждёт хэндл и помогает — может украсть
-    // вторую ветвь (путь вора в `join_on_stack`).
+    // A task on the worker does a join while the main thread waits on the handle and helps; it may
+    // steal the second branch (the thief path in `join_on_stack`).
     let pool = Arc::new(pool());
     let on_worker = Arc::clone(&pool);
     let handle = pool.spawn(Priority::Normal, move || fib(&on_worker, 6));
     assert_eq!(handle.join().unwrap(), 8);
-    // Два внешних потока одновременно (у каждого свой внешний слот).
+    // Two external threads at once (each with its own external slot).
     std::thread::scope(|s| {
         let other = s.spawn(|| fib(&pool, 5));
         assert_eq!(fib(&pool, 5), 5);
@@ -62,7 +62,7 @@ fn join_propagates_panic_from_either_branch() {
     let _ = std::panic::take_hook();
     assert!(matches!(left, Err(JobError::Panicked { .. })));
     assert!(matches!(right, Err(JobError::Panicked { .. })));
-    // Пул жив.
+    // The pool is alive.
     assert_eq!(pool.join(|| 1, || 2).unwrap(), (1, 2));
 }
 

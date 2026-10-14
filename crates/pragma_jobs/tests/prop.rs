@@ -1,5 +1,5 @@
-//! Property-тесты: параллельные примитивы эквивалентны последовательному коду.
-// Тестовый код: паника = провал теста, переполнение исключено размерами входа.
+//! Property tests: the parallel primitives are equivalent to sequential code.
+// Test code: a panic is a test failure; overflow is ruled out by the input sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -27,7 +27,7 @@ fn grain() -> impl Strategy<Value = Grain> {
     prop_oneof![Just(Grain::Auto), (0_usize..64).prop_map(Grain::Fixed)]
 }
 
-/// Рекурсивное дерево scope: каждый узел добавляет своё значение и порождает детей.
+/// A recursive tree of scopes: every node adds its value and spawns children.
 fn nested<'scope>(
     s: Scope<'scope, '_>,
     pool: &'scope ThreadPool,
@@ -41,7 +41,7 @@ fn nested<'scope>(
     }
     for i in 0..fanout {
         if i % 2 == 0 {
-            // Чётные дети — задачи той же области, нечётные — новая вложенная область.
+            // Even children are tasks of the same scope, odd ones open a new nested scope.
             s.spawn(move || nested(s, pool, depth - 1, fanout, sum));
         } else {
             pool.scope(|inner| nested(inner, pool, depth - 1, fanout, sum))
@@ -81,7 +81,7 @@ proptest! {
         data in proptest::collection::vec(-1.0e6_f64..1.0e6, 0..2000),
         grain in grain(),
     ) {
-        // Эталон: та же свёртка в порядке чанков на одном потоке.
+        // Reference: the same fold in chunk order on a single thread.
         let size = grain.chunk_size(data.len());
         let expected = data
             .chunks(size)

@@ -16,22 +16,22 @@ use crate::stats::{CounterSet, Counters, PoolStats, counter_set};
 use crate::watchdog::{Active, Watchdog};
 use crate::{JobsError, PoolConfig, Priority, ShutdownPolicy, sys};
 
-/// Страховка от ошибок протокола пробуждения: спящий воркер всё равно проверит очереди.
+/// A safety net against wakeup protocol bugs: a sleeping worker checks the queues anyway.
 const PARK_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// Единица работы в очередях пула.
+/// A unit of work in the pool queues.
 pub(crate) enum Job {
-    /// `'static`-задача (`spawn`); сама перехватывает свою панику и сообщает результат.
+    /// A `'static` task (`spawn`); it catches its own panic and reports the result itself.
     Boxed(Box<dyn FnOnce() + Send + 'static>),
-    /// Задача области (`scope`/`join`/`parallel_*`) со стёртым в `pragma_sync` лайфтаймом.
+    /// A scope task (`scope`/`join`/`parallel_*`) with its lifetime erased in `pragma_sync`.
     Scoped(ScopedTask),
-    /// Вторая ветвь `join` на стеке владельца (DECISIONS #30).
+    /// The second branch of `join` on the owner's stack (DECISIONS #30).
     Stack(StackJob),
 }
 
 impl Job {
-    /// Исполняет задачу; возвращает индекс участника пула, которого нужно разбудить
-    /// (владелец `join`, уснувший в ожидании этой задачи).
+    /// Runs the task; returns the index of the pool participant that has to be woken
+    /// (the owner of a `join` that fell asleep waiting for this task).
     fn run(self) -> Option<usize> {
         match self {
             Self::Boxed(f) => f(),
@@ -42,11 +42,11 @@ impl Job {
     }
 }
 
-/// Сколько спит владелец `join`, ожидающий украденную ветвь, прежде чем снова поискать работу
-/// (вор будит раньше, когда закончит).
+/// How long the owner of a `join` waiting for a stolen branch sleeps before looking for work again
+/// (the thief wakes it earlier when it finishes).
 const JOIN_RECHECK: Duration = Duration::from_micros(500);
 
-/// Локальная очередь воркера: только `Frame` и `Normal` (фоновые задачи — только глобально).
+/// A worker's local queue: only `Frame` and `Normal` (background tasks are global only).
 #[derive(Clone, Copy)]
 enum Lane {
     Frame,
@@ -64,8 +64,8 @@ impl Lane {
     }
 }
 
-/// Локальные очереди участника пула и его парковщик: переезжают вместе между внешним слотом
-/// и потоком, который его занял.
+/// The local queues of a pool participant and its parker: they move together between an external
+/// slot and the thread that occupies it.
 struct LocalQueues {
     frame: Deque<Job>,
     normal: Deque<Job>,
@@ -122,7 +122,7 @@ impl LocalStealers {
     }
 }
 
-/// Запуск воркеров: сколько ещё не закончили инициализацию потока (см. [`ThreadPool::new`]).
+/// Worker startup: how many have not finished thread initialization yet (see [`ThreadPool::new`]).
 struct Startup {
     pending: Mutex<usize>,
     done: Condvar,
@@ -144,7 +144,7 @@ impl Startup {
         }
     }
 
-    /// Ждёт, пока каждый воркер не отметится в [`worker_ready`](Self::worker_ready).
+    /// Waits until every worker has checked in via [`worker_ready`](Self::worker_ready).
     fn wait(&self) {
         let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         while *pending > 0 {
@@ -161,37 +161,37 @@ impl Startup {
     }
 }
 
-/// Состояние пула, общее для владельца, воркеров и хэндлов.
+/// Pool state shared by the owner, the workers and the handles.
 pub(crate) struct Shared {
     frame: Injector<Job>,
     normal: Injector<Job>,
     background: Injector<Job>,
-    /// Сначала воркеры (`0..workers`), затем внешние слоты (`workers..`).
+    /// Workers first (`0..workers`), then external slots (`workers..`).
     stealers: Vec<LocalStealers>,
-    /// По одному на воркер; индекс совпадает с индексом в `stealers`.
+    /// One per worker; the index matches the index in `stealers`.
     unparkers: Vec<Unparker>,
-    /// Будильники всех участников (воркеры, затем внешние слоты) — для владельца `join`,
-    /// уснувшего в ожидании украденной ветви.
+    /// Wakers of all participants (workers, then external slots), for the owner of a `join`
+    /// that fell asleep waiting for a stolen branch.
     participants: Vec<Unparker>,
-    /// Локальные очереди для внешних потоков (см. [`enter`]). `None` — слот занят.
+    /// Local queues for external threads (see [`enter`]). `None` means the slot is taken.
     external_slots: Vec<Mutex<Option<LocalQueues>>>,
-    /// Индексы спящих воркеров (стек: будим последнего уснувшего — его кэш теплее).
+    /// Indices of sleeping workers (a stack: we wake the last one to fall asleep, its cache is warmer).
     idle: Mutex<Vec<usize>>,
-    // Горячие счётчики — каждый на своей кэш-линии, чтобы не мешать друг другу.
+    // Hot counters, each on its own cache line so they do not interfere with each other.
     sleeping: CachePadded<AtomicUsize>,
-    /// Воркеры, которые не спят и ищут работу (фаза spin): при их наличии новую задачу
-    /// подберут без пробуждения спящих.
+    /// Workers that are awake and looking for work (the spin phase): while there are any, a new
+    /// task is picked up without waking sleepers.
     searching: CachePadded<AtomicUsize>,
     background_active: CachePadded<AtomicUsize>,
     shutdown: AtomicBool,
-    /// Потоки пула завершены и `join`-ены: задачи в очередях больше никто не исполнит.
+    /// Pool threads have exited and been `join`ed: nobody will run queued tasks anymore.
     stopped: AtomicBool,
     policy: ShutdownPolicy,
     background_limit: usize,
-    /// Раундов `yield` в фазе поиска перед парковкой (`PoolConfig::with_idle_spin`).
+    /// `yield` rounds in the search phase before parking (`PoolConfig::with_idle_spin`).
     idle_spin: u32,
-    /// Метрики (см. [`PoolStats`]): по набору на каждый индекс `stealers` и последний — для
-    /// внешних потоков без слота.
+    /// Metrics (see [`PoolStats`]): one set per `stealers` index, and the last one for
+    /// external threads without a slot.
     counters: CounterSet,
     startup: Startup,
     #[cfg(debug_assertions)]
@@ -199,9 +199,9 @@ pub(crate) struct Shared {
 }
 
 thread_local! {
-    /// Контекст воркера, если текущий поток — воркер какого-либо пула.
+    /// The worker context, if the current thread is a worker of some pool.
     static WORKER: Cell<Option<Rc<WorkerCtx>>> = const { Cell::new(None) };
-    /// Приоритет исполняемой сейчас задачи (`None` — поток вне задачи пула).
+    /// Priority of the task running right now (`None`: the thread is outside a pool task).
     static CURRENT_PRIORITY: Cell<Option<Priority>> = const { Cell::new(None) };
 }
 
@@ -221,16 +221,16 @@ fn current_worker_of(shared: &Arc<Shared>) -> Option<Rc<WorkerCtx>> {
     current_worker().filter(|w| Arc::ptr_eq(&w.shared, shared))
 }
 
-/// Число внешних слотов: столько потоков вне пула одновременно ждут «как воркеры».
+/// Number of external slots: this many threads outside the pool can wait "like workers" at once.
 const EXTERNAL_SLOTS: usize = 4;
 
-/// Выполняет `f`, сделав текущий поток временным участником пула.
+/// Runs `f` with the current thread made a temporary participant of the pool.
 ///
-/// Внешний поток (например, главный) занимает свободный внешний слот — собственную
-/// LIFO-очередь, видимую ворам. Подзадачи `join`/`scope` попадают в неё, а ожидание берёт
-/// сначала свежие свои задачи, как воркер. Без слота подзадачи ушли бы в FIFO-injector, и
-/// помощь в ожидании брала бы самые старые (крупные) задачи, наращивая стек на каждом уровне.
-/// Если все слоты заняты, поток работает через глобальные очереди (медленнее, но корректно).
+/// An external thread (for example the main one) takes a free external slot: its own
+/// LIFO queue, visible to thieves. Subtasks of `join`/`scope` go into it, and the wait takes
+/// its own fresh tasks first, like a worker. Without a slot, subtasks would go into the FIFO injector,
+/// and helping while waiting would take the oldest (largest) tasks, growing the stack at every level.
+/// If all slots are taken, the thread works through the global queues (slower, but correct).
 pub(crate) fn enter<R>(shared: &Arc<Shared>, f: impl FnOnce() -> R) -> R {
     if current_worker_of(shared).is_some() {
         return f();
@@ -254,15 +254,15 @@ pub(crate) fn enter<R>(shared: &Arc<Shared>, f: impl FnOnce() -> R) -> R {
 }
 
 thread_local! {
-    /// Контекст внешнего слота от прошлого [`enter`] этого потока, с очередями-заглушками
-    /// вместо настоящих. Без него каждый вход главного потока в пул (раз в кадр) стоил бы
-    /// аллокации `Rc` (DECISIONS #18). Держит `Arc<Shared>` последнего пула до следующего
-    /// `enter` или выхода из потока: потоков пула это не задерживает, только память.
+    /// The external slot context from this thread's previous [`enter`], with placeholder queues
+    /// instead of the real ones. Without it, every entry of the main thread into the pool (once per
+    /// frame) would cost an `Rc` allocation (DECISIONS #18). It holds the last pool's `Arc<Shared>`
+    /// until the next `enter` or thread exit: this does not hold back the pool threads, only memory.
     static SPARE_EXTERNAL: Cell<Option<Rc<WorkerCtx>>> = const { Cell::new(None) };
 }
 
-/// Контекст внешнего потока с очередями слота `local` и заглушка, которую он вернёт на их
-/// место при выходе (`None` — контекст новый, заглушку создаст [`ExternalGuard`]).
+/// The external thread's context with the slot queues `local`, and the placeholder it will put back
+/// in their place on exit (`None`: the context is new, and [`ExternalGuard`] creates the placeholder).
 fn external_ctx(
     shared: &Arc<Shared>,
     index: usize,
@@ -278,7 +278,7 @@ fn external_ctx(
     (ctx, None)
 }
 
-/// Возвращает внешний слот и восстанавливает прежний контекст потока (и при панике).
+/// Returns the external slot and restores the thread's previous context (also on panic).
 struct ExternalGuard<'a> {
     shared: &'a Shared,
     slot: usize,
@@ -303,9 +303,9 @@ impl Drop for ExternalGuard<'_> {
             tracing::error!("external pool slot context is still shared; slot is lost");
             return;
         };
-        // Оставшиеся в очереди задачи (например, `spawn` из тела `scope`) не теряются:
-        // очередь возвращается в слот, её по-прежнему видят воры. На её место встаёт
-        // заглушка, и контекст переиспользуется следующим `enter`.
+        // Tasks left in the queue (for example a `spawn` from a `scope` body) are not lost:
+        // the queue goes back into the slot, where thieves still see it. A placeholder takes
+        // its place, and the context is reused by the next `enter`.
         let placeholder = self.placeholder.take().unwrap_or_else(LocalQueues::new);
         let local = std::mem::replace(&mut inner.local, placeholder);
         *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(local);
@@ -313,9 +313,9 @@ impl Drop for ExternalGuard<'_> {
     }
 }
 
-/// Приоритет для подзадач `scope`/`join`/`parallel_*`: наследуется от текущей задачи.
-/// Вне пула — `Frame` (работу кадра запускает главный поток). Подзадачи фоновой задачи
-/// идут в `Normal`: иначе они упёрлись бы в лимит `Background`, который держит их же родитель.
+/// The priority for `scope`/`join`/`parallel_*` subtasks: inherited from the current task.
+/// Outside the pool it is `Frame` (frame work is launched by the main thread). Subtasks of a
+/// background task go to `Normal`: otherwise they would hit the `Background` limit held by their own parent.
 pub(crate) fn inherited_priority() -> Priority {
     match CURRENT_PRIORITY.try_with(Cell::get).ok().flatten() {
         None => Priority::Frame,
@@ -324,12 +324,12 @@ pub(crate) fn inherited_priority() -> Priority {
     }
 }
 
-/// Приоритет задачи пула, которую исполняет текущий поток (`None` — поток вне задач пула).
+/// The priority of the pool task the current thread is running (`None`: the thread is outside pool tasks).
 pub(crate) fn current_priority() -> Option<Priority> {
     CURRENT_PRIORITY.try_with(Cell::get).ok().flatten()
 }
 
-/// Debug-сборки: отмечает задачу с меткой в ячейке watchdog текущего потока пула.
+/// Debug builds: registers a labeled task in the watchdog cell of the current pool thread.
 #[cfg(debug_assertions)]
 pub(crate) struct WatchGuard {
     ctx: Rc<WorkerCtx>,
@@ -352,8 +352,8 @@ impl Drop for WatchGuard {
     }
 }
 
-/// Исполняет задачу с выставленным текущим приоритетом. Паника, вырвавшаяся мимо обёртки
-/// задачи (например, из деструктора захваченного значения), не убивает поток.
+/// Runs a task with the current priority set. A panic that escapes past the task wrapper
+/// (for example from a captured value's destructor) does not kill the thread.
 fn execute(shared: &Shared, job: Job, priority: Priority) {
     let previous = CURRENT_PRIORITY
         .try_with(|p| p.replace(Some(priority)))
@@ -364,13 +364,13 @@ fn execute(shared: &Shared, job: Job, priority: Priority) {
         Ok(None) => {}
         Err(_) => tracing::error!("panic escaped a job wrapper; worker keeps running"),
     }
-    // Ошибка доступа возможна только при разрушении TLS на выходе потока — тогда восстанавливать нечего.
+    // An access error is only possible while TLS is torn down at thread exit; then there is nothing to restore.
     let _ = CURRENT_PRIORITY.try_with(|p| p.set(previous));
 }
 
-/// Сбрасывает невыполненную задачу. Деструктор захваченных значений (например, future
-/// отменённой async-задачи) — пользовательский код: его паника не должна уронить поток,
-/// который останавливает пул или планирует задачу.
+/// Drops a task that has not run. The destructor of captured values (for example the future
+/// of a cancelled async task) is user code: its panic must not bring down the thread
+/// that is stopping the pool or scheduling the task.
 fn drop_job(job: Job) {
     if panic::catch_unwind(AssertUnwindSafe(|| drop(job))).is_err() {
         tracing::error!("panic while dropping a cancelled job");
@@ -400,16 +400,16 @@ impl Shared {
         self.shutdown.load(Ordering::SeqCst)
     }
 
-    /// Кладёт отсоединённую задачу, если пул ещё принимает работу; иначе сбрасывает её
-    /// (см. [`Spawner::spawn_detached`](crate::Spawner::spawn_detached)).
+    /// Pushes a detached task if the pool still accepts work; otherwise drops it
+    /// (see [`Spawner::spawn_detached`](crate::Spawner::spawn_detached)).
     pub(crate) fn push_detached(self: &Arc<Self>, job: Job, priority: Priority) -> bool {
         if self.is_shutdown() {
             drop_job(job);
             return false;
         }
         self.push(job, priority);
-        // Гонка с `Drop` пула, который уже `join`-ил потоки: пара к `fence` перед
-        // `drain_queues` в `Drop` — либо он увидит нашу задачу, либо мы увидим `stopped`.
+        // A race with the pool's `Drop` that has already `join`ed the threads: paired with the `fence`
+        // before `drain_queues` in `Drop`; either it sees our task, or we see `stopped`.
         fence(Ordering::SeqCst);
         if self.stopped.load(Ordering::SeqCst) {
             self.drain_queues();
@@ -418,7 +418,7 @@ impl Shared {
         true
     }
 
-    /// Кладёт задачу в очередь и будит одного спящего воркера.
+    /// Pushes a task into a queue and wakes one sleeping worker.
     pub(crate) fn push(self: &Arc<Self>, job: Job, priority: Priority) {
         let local = match priority {
             Priority::Background => None,
@@ -433,22 +433,22 @@ impl Shared {
     }
 
     fn notify_one(&self) {
-        // Пара к `fence` в `WorkerCtx::sleep`: либо воркер увидит задачу при перепроверке,
-        // либо мы увидим его в `sleeping`.
+        // Paired with the `fence` in `WorkerCtx::sleep`: either the worker sees the task when it
+        // rechecks, or we see it in `sleeping`.
         fence(Ordering::SeqCst);
-        // Ищущий воркер заберёт задачу сам (а если уснёт, то перепроверит очереди перед
-        // парковкой), поэтому системный вызов на пробуждение не нужен.
+        // A searching worker will pick the task up itself (and if it falls asleep, it rechecks the
+        // queues before parking), so no wakeup system call is needed.
         if self.sleeping.load(Ordering::SeqCst) == 0 || self.searching.load(Ordering::SeqCst) > 0 {
             return;
         }
         self.wake_one();
     }
 
-    /// Как [`notify_one`](Self::notify_one), но без барьера — после push в собственную очередь
-    /// участника, который сам дождётся этой задачи (`join`). Без барьера проверка может
-    /// разминуться с засыпающим воркером, но это стоит только параллелизма, не зависания:
-    /// задачу из своей очереди владелец снимет сам, а уснувший проснётся при следующем push
-    /// или по `PARK_TIMEOUT` (DECISIONS #40). Барьер — ~10% времени вложенного `join`.
+    /// Like [`notify_one`](Self::notify_one), but without the fence: used after a push into the own
+    /// queue of a participant that will wait for this task itself (`join`). Without the fence the
+    /// check may miss a worker that is falling asleep, but that costs only parallelism, not a hang:
+    /// the owner pops the task from its own queue itself, and the sleeper wakes on the next push
+    /// or after `PARK_TIMEOUT` (DECISIONS #40). The fence is ~10% of the time of a nested `join`.
     fn notify_one_local(&self) {
         if self.sleeping.load(Ordering::Relaxed) == 0 || self.searching.load(Ordering::Relaxed) > 0
         {
@@ -469,7 +469,7 @@ impl Shared {
         }
     }
 
-    /// Будит участника пула `index` (владельца `join`, уснувшего на своём парковщике).
+    /// Wakes pool participant `index` (the owner of a `join` asleep on its parker).
     fn wake_participant(&self, index: usize) {
         if let Some(unparker) = self.participants.get(index) {
             unparker.unpark();
@@ -523,9 +523,9 @@ impl Shared {
         self.background_active.fetch_sub(1, Ordering::AcqRel);
     }
 
-    /// Поиск работы для потока, который не является воркером этого пула: только `Frame` и
-    /// `Normal`. Фоновые задачи внешний поток не берёт — иначе главный поток мог бы надолго
-    /// застрять в запекании посреди кадра.
+    /// Finding work for a thread that is not a worker of this pool: only `Frame` and
+    /// `Normal`. An external thread does not take background tasks; otherwise the main thread could
+    /// get stuck in baking for a long time in the middle of a frame.
     fn find_external(&self) -> Option<(Job, Priority)> {
         for lane in Lane::ALL {
             let priority = lane.priority();
@@ -544,7 +544,7 @@ impl Shared {
         None
     }
 
-    /// Метрики внешних потоков без слота (пишут несколько потоков — только RMW).
+    /// Metrics of external threads without a slot (several threads write them, so RMW only).
     fn external_counters(&self) -> Option<&Counters> {
         self.counters.last().map(|c| &**c)
     }
@@ -575,8 +575,8 @@ impl Shared {
             })
     }
 
-    /// Сбрасывает задачи глобальных очередей и свободных внешних слотов
-    /// (их хэндлы получают `Cancelled`).
+    /// Drops the tasks of the global queues and of free external slots
+    /// (their handles get `Cancelled`).
     fn drain_queues(&self) {
         for priority in [Priority::Frame, Priority::Normal, Priority::Background] {
             while let Some(job) = steal_loop(|| self.injector(priority).steal()) {
@@ -590,15 +590,18 @@ impl Shared {
         }
     }
 
-    /// Поток вызывающего — воркер этого пула или внешний поток внутри `scope`/`join`.
+    /// Whether the caller's thread is a worker of this pool or an external thread inside `scope`/`join`.
     pub(crate) fn in_context(self: &Arc<Self>) -> bool {
         current_worker_of(self).is_some()
     }
 }
 
-/// `join` через задачу на стеке, если текущий поток — участник пула `shared` (воркер или
-/// внешний поток во временном слоте); `None` — не участник, `a` и `b` возвращаются нетронутыми.
-#[expect(clippy::type_complexity, reason = "внутренний результат двух ветвей")]
+/// `join` via a stack job if the current thread is a participant of pool `shared` (a worker or
+/// an external thread in a temporary slot); `Err`: not a participant, `a` and `b` are returned untouched.
+#[expect(
+    clippy::type_complexity,
+    reason = "internal result of the two branches"
+)]
 pub(crate) fn join_as_participant<A, B, RA, RB>(
     shared: &Arc<Shared>,
     a: A,
@@ -615,7 +618,7 @@ where
     }
 }
 
-/// Выполняет одну единицу чужой работы, если она есть (help-while-wait).
+/// Runs one unit of someone else's work, if there is any (help-while-wait).
 pub(crate) fn help_once(shared: &Arc<Shared>) -> bool {
     if let Some(worker) = current_worker_of(shared) {
         return worker.run_one();
@@ -635,7 +638,7 @@ pub(crate) fn help_once(shared: &Arc<Shared>) -> bool {
 struct Found {
     job: Job,
     priority: Priority,
-    /// Задача заняла слот `Background`, который нужно вернуть после исполнения.
+    /// The task took a `Background` slot that must be released after it runs.
     background_slot: bool,
 }
 
@@ -644,11 +647,11 @@ struct WorkerCtx {
     index: usize,
     local: LocalQueues,
     rng: Cell<u64>,
-    /// Воркер уже исполняет фоновую задачу: вложенные фоновые задачи (help-while-wait)
-    /// идут в счёт того же слота, иначе при лимите 1 ожидание фоновой задачи внутри
-    /// фоновой задачи зависло бы навсегда.
+    /// The worker is already running a background task: nested background tasks (help-while-wait)
+    /// count against the same slot; otherwise, with a limit of 1, waiting for a background task
+    /// inside a background task would hang forever.
     holds_background: Cell<bool>,
-    /// Внешний поток во временном слоте (см. [`enter`]): не берёт фоновые задачи и не спит.
+    /// An external thread in a temporary slot (see [`enter`]): takes no background tasks and never sleeps.
     external: bool,
 }
 
@@ -672,8 +675,8 @@ impl WorkerCtx {
             | 1
     }
 
-    /// Перенастраивает кэшированный внешний контекст на слот `index` пула `shared`, как
-    /// новый; возвращает очереди-заглушку, стоявшие на месте `local`.
+    /// Re-targets the cached external context to slot `index` of pool `shared`, as if
+    /// new; returns the placeholder queues that stood in place of `local`.
     fn reuse(&mut self, shared: &Arc<Shared>, index: usize, local: LocalQueues) -> LocalQueues {
         if !Arc::ptr_eq(&self.shared, shared) {
             self.shared = Arc::clone(shared);
@@ -685,12 +688,12 @@ impl WorkerCtx {
         std::mem::replace(&mut self.local, local)
     }
 
-    /// Метрики этого потока: пишет только он (воркер или владелец внешнего слота).
+    /// This thread's metrics: only it writes them (a worker or the owner of an external slot).
     fn counters(&self) -> Option<&Counters> {
         self.shared.counters.get(self.index).map(|c| &**c)
     }
 
-    /// xorshift64: детерминированный выбор жертвы без системного RNG.
+    /// xorshift64: deterministic victim selection without the system RNG.
     fn next_random(&self) -> u64 {
         let mut x = self.rng.get();
         x ^= x << 13;
@@ -700,8 +703,8 @@ impl WorkerCtx {
         x
     }
 
-    /// Порядок поиска: для `Frame`, затем для `Normal` — своя очередь → глобальная →
-    /// кража у случайной жертвы; затем `Background` в пределах лимита.
+    /// Search order: for `Frame`, then for `Normal`: own queue -> global queue ->
+    /// steal from a random victim; then `Background` within the limit.
     fn find(&self) -> Option<Found> {
         for lane in Lane::ALL {
             if let Some(job) = self.find_in_lane(lane) {
@@ -740,14 +743,14 @@ impl WorkerCtx {
                 .skip(start)
                 .take(victims)
             {
-                // `steal` в crossbeam сначала входит в эпоху (`epoch::pin`), а пустых жертв на
-                // круге поиска почти все: дешёвая проверка длины без входа в эпоху.
+                // crossbeam's `steal` first enters an epoch (`epoch::pin`), and almost all victims
+                // on a search round are empty: a cheap length check without entering the epoch.
                 if i == self.index || stealers.get(lane).is_empty() {
                     continue;
                 }
-                // У жертвы крадём по одной (самой старой, обычно самой крупной) задаче:
-                // кража пачкой уносит и мелкие `join`-ветви, которых владелец вот-вот
-                // дождётся сам, — и вместо локального pop начинается пинг-понг между потоками.
+                // Steal one task at a time from a victim (the oldest, usually the largest):
+                // stealing a batch also carries off small `join` branches that the owner is
+                // about to finish waiting for itself, and a local pop turns into ping-pong between threads.
                 match stealers.get(lane).steal() {
                     Steal::Success(job) => {
                         if let Some(counters) = self.counters() {
@@ -766,8 +769,8 @@ impl WorkerCtx {
     }
 
     fn find_background(&self) -> Option<Found> {
-        // Внешний поток (главный) не берёт фон: застрять в запекании посреди кадра хуже,
-        // чем подождать.
+        // An external thread (the main one) does not take background work: getting stuck in baking
+        // in the middle of a frame is worse than waiting.
         if self.external || self.shared.background.is_empty() {
             return None;
         }
@@ -805,8 +808,8 @@ impl WorkerCtx {
         if found.background_slot {
             self.holds_background.set(true);
         }
-        // До исполнения: к моменту, когда ожидающий увидит завершение задачи, счётчик уже
-        // увеличен (снимок после `join` сходится с числом задач).
+        // Before running: by the time a waiter sees the task completed, the counter has already
+        // been incremented (a snapshot after `join` matches the number of tasks).
         if let Some(counters) = self.counters() {
             counters.executed();
         }
@@ -817,16 +820,16 @@ impl WorkerCtx {
         }
     }
 
-    /// Фаза spin: воркер не спит и ищет работу, отмечаясь в `searching`.
+    /// The spin phase: the worker stays awake and looks for work, registered in `searching`.
     fn search(&self) -> Option<Found> {
         self.shared.searching.fetch_add(1, Ordering::SeqCst);
         let backoff = Backoff::new();
         let mut yields = 0_u32;
         let mut found = None;
         loop {
-            // Сначала короткий spin (`Backoff`), затем `idle_spin` раундов с `yield`: потоки,
-            // которые вот-вот получат работу (следующая волна `join`, следующий кадр), не
-            // платят за парковку и пробуждение через ОС (см. `docs/perf.md`).
+            // First a short spin (`Backoff`), then `idle_spin` rounds of `yield`: threads
+            // that are about to get work (the next wave of `join`, the next frame) do not
+            // pay for parking and an OS wakeup (see `docs/perf.md`).
             if !backoff.is_completed() {
                 backoff.snooze();
             } else if yields < self.shared.idle_spin {
@@ -841,10 +844,10 @@ impl WorkerCtx {
             }
         }
         self.shared.searching.fetch_sub(1, Ordering::SeqCst);
-        // Пока мы искали, пушеры не будили спящих; если работы больше, чем одна задача,
-        // передаём эстафету следующему.
-        // Сначала дешёвая проверка `sleeping`: сканировать чужие очереди, когда будить некого,
-        // — лишние промахи кэша на горячем пути.
+        // While we were searching, pushers did not wake sleepers; if there is more than one task,
+        // pass the baton to the next worker.
+        // The cheap `sleeping` check first: scanning other queues when there is nobody to wake
+        // means needless cache misses on the hot path.
         if found.is_some()
             && self.shared.sleeping.load(Ordering::SeqCst) > 0
             && self.shared.has_visible_work()
@@ -854,10 +857,10 @@ impl WorkerCtx {
         found
     }
 
-    /// `join` на участнике пула (воркер или внешний слот): `b` — задача на стеке
-    /// (DECISIONS #30). Не украденную `b` поток забирает из своей очереди и исполняет сам —
-    /// без атомарных RMW и без аллокаций; украденную ждёт, помогая, а затем засыпает до
-    /// пробуждения вором.
+    /// `join` on a pool participant (a worker or an external slot): `b` is a stack job
+    /// (DECISIONS #30). If `b` was not stolen, the thread takes it back from its queue and runs it
+    /// itself, with no atomic RMW and no allocations; a stolen one it waits for while helping, then
+    /// sleeps until the thief wakes it.
     pub(crate) fn join<A, B, RA, RB>(
         &self,
         a: A,
@@ -882,8 +885,8 @@ impl WorkerCtx {
                 queue.push(Job::Stack(job));
                 self.shared.notify_one_local();
                 let ra = panic::catch_unwind(AssertUnwindSafe(a));
-                // `a` забрала из очереди всё, что положила сама (кроме `spawn` без ожидания),
-                // поэтому сверху — наша `b`, если её не украли.
+                // `a` has taken back everything it pushed itself (except a `spawn` it does not wait for),
+                // so our `b` is on top, unless it was stolen.
                 match queue.pop() {
                     Some(Job::Stack(job)) if job.id() == id => {
                         if let Some(counters) = self.counters() {
@@ -905,15 +908,15 @@ impl WorkerCtx {
         (ra, rb)
     }
 
-    /// Один шаг ожидания украденной ветви `join`: помочь, покрутиться или уснуть.
+    /// One step of waiting for a stolen `join` branch: help, spin or sleep.
     fn wait_step(&self, latch: &JoinLatch<'_>, backoff: &Backoff) {
         if self.run_one() {
             backoff.reset();
         } else if !backoff.is_completed() {
             backoff.snooze();
         } else if latch.prepare_park() {
-            // Вор разбудит по индексу (`Shared::wake_participant`); таймаут — чтобы снова
-            // поискать работу, появившуюся, пока спим (новые задачи будят только воркеров).
+            // The thief wakes us by index (`Shared::wake_participant`); the timeout lets us look again
+            // for work that appeared while we slept (new tasks wake only workers).
             self.local.parker.park_timeout(JOIN_RECHECK);
         }
     }
@@ -929,7 +932,7 @@ impl WorkerCtx {
             idle.push(self.index);
             self.shared.sleeping.store(idle.len(), Ordering::SeqCst);
         }
-        // Пара к `fence` в `Shared::notify_one`.
+        // Paired with the `fence` in `Shared::notify_one`.
         fence(Ordering::SeqCst);
         if !self.shared.has_visible_work() && !self.shared.is_shutdown() {
             let parked = Instant::now();
@@ -942,7 +945,7 @@ impl WorkerCtx {
     }
 }
 
-/// Платформенные настройки воркера (`sys`), применяемые им самим при старте.
+/// The worker's platform settings (`sys`), applied by the worker itself at startup.
 #[derive(Clone, Copy)]
 struct ThreadSetup {
     priority: Option<sys::ThreadPriority>,
@@ -950,7 +953,7 @@ struct ThreadSetup {
 }
 
 impl ThreadSetup {
-    /// Отказ ОС — не повод не запускать воркер: предупреждение и работа без настройки.
+    /// An OS refusal is no reason not to start the worker: a warning, and it runs without the setting.
     fn apply(self, index: usize) {
         if let Some(priority) = self.priority
             && let Err(error) = sys::set_current_thread_priority(priority)
@@ -967,16 +970,16 @@ impl ThreadSetup {
 
 fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, setup: ThreadSetup) {
     setup.apply(index);
-    // Первая кража регистрирует поток в `crossbeam-epoch` (аллокация хэндла в TLS). Делаем её
-    // сразу, а не посреди кадра: с проверкой `is_empty` перед кражей воркер может долго не
-    // доходить до `steal` (кадр графа без аллокаций, `tests/alloc.rs`).
+    // The first steal registers the thread in `crossbeam-epoch` (a handle allocation in TLS). Do it
+    // right away rather than in the middle of a frame: with the `is_empty` check before stealing, a
+    // worker may not reach `steal` for a long time (allocation-free graph frame, `tests/alloc.rs`).
     if let Some(own) = shared.stealers.get(index) {
         let _ = own.frame.steal();
     }
     let ctx = Rc::new(WorkerCtx::new(shared, index, local, false));
     let _ = WORKER.try_with(|cell| cell.set(Some(Rc::clone(&ctx))));
-    // Всё, что поток аллоцирует один раз (хэндл эпохи, контекст, список TLS-деструкторов),
-    // уже выделено: `ThreadPool::new` может вернуть управление (DECISIONS #39).
+    // Everything the thread allocates once (the epoch handle, the context, the TLS destructor list)
+    // has been allocated: `ThreadPool::new` may return (DECISIONS #39).
     ctx.shared.startup.worker_ready();
     loop {
         if ctx.shared.policy == ShutdownPolicy::Cancel && ctx.shared.is_shutdown() {
@@ -1001,24 +1004,24 @@ fn worker_main(shared: Arc<Shared>, index: usize, local: LocalQueues, setup: Thr
         }
     }
     let _ = WORKER.try_with(Cell::take);
-    // Политика `Cancel`: задачи, оставшиеся в своей очереди, сбрасываются (хэндлы — `Cancelled`).
+    // `Cancel` policy: tasks left in the own queue are dropped (handles get `Cancelled`).
     ctx.local.drain();
 }
 
-/// Пул рабочих потоков с work-stealing.
+/// A work-stealing pool of worker threads.
 ///
-/// Создание — [`ThreadPool::new`]; `Drop` останавливает и `join`-ит все потоки
-/// (см. [`ShutdownPolicy`]). Паника в задаче не убивает воркер и возвращается как
+/// Created with [`ThreadPool::new`]; `Drop` stops and `join`s all threads
+/// (see [`ShutdownPolicy`]). A panic in a task does not kill the worker and is returned as
 /// [`JobError::Panicked`](crate::JobError::Panicked).
 pub struct ThreadPool {
     pub(crate) shared: Arc<Shared>,
     threads: Vec<JoinHandle<()>>,
-    /// Поток watchdog (только debug-сборки и только если он включён в конфиге).
+    /// The watchdog thread (debug builds only, and only if enabled in the config).
     #[cfg(debug_assertions)]
     watchdog: Option<JoinHandle<()>>,
 }
 
-/// Поток watchdog: просматривает ячейки потоков пула, пока пул не начал остановку.
+/// The watchdog thread: scans the pool threads' cells until the pool begins shutting down.
 #[cfg(debug_assertions)]
 fn watchdog_main(shared: &Shared) {
     let Some(watchdog) = shared.watchdog.as_ref() else {
@@ -1041,14 +1044,14 @@ impl std::fmt::Debug for ThreadPool {
 }
 
 impl ThreadPool {
-    /// Запускает пул. Потоки называются `<name_prefix>-<index>`.
+    /// Starts the pool. Threads are named `<name_prefix>-<index>`.
     ///
-    /// Возвращается, когда каждый воркер закончил инициализацию потока (приоритет и affinity
-    /// применены, одноразовые выделения потока сделаны): первые кадры не платят за запуск
-    /// потоков, даже если воркерам не хватает ядер.
+    /// Returns once every worker has finished thread initialization (priority and affinity
+    /// applied, one-time thread allocations done): the first frames do not pay for starting
+    /// threads, even if there are not enough cores for the workers.
     ///
-    /// Если ОС не дала создать поток, уже запущенные потоки останавливаются и `join`-ятся,
-    /// а возвращается [`JobsError::SpawnFailed`].
+    /// If the OS refuses to create a thread, the threads already started are stopped and `join`ed,
+    /// and [`JobsError::SpawnFailed`] is returned.
     pub fn new(config: PoolConfig) -> Result<Self, JobsError> {
         let config = config.validate()?;
         let workers = config.workers();
@@ -1120,19 +1123,19 @@ impl ThreadPool {
             let shared = Arc::clone(&pool.shared);
             match builder.spawn(move || worker_main(shared, index, local, setup)) {
                 Ok(handle) => pool.threads.push(handle),
-                // `pool` сбрасывается здесь и останавливает уже запущенные потоки.
+                // `pool` is dropped here and stops the threads already started.
                 Err(source) => return Err(JobsError::SpawnFailed { name, source }),
             }
         }
-        // Иначе одноразовая инициализация воркера, которому под переподпиской не досталось
-        // ядра, случилась бы посреди первых кадров (DECISIONS #39).
+        // Otherwise the one-time initialization of a worker that got no core under
+        // oversubscription would happen in the middle of the first frames (DECISIONS #39).
         pool.shared.startup.wait();
         #[cfg(debug_assertions)]
         pool.start_watchdog(config.name_prefix());
         Ok(pool)
     }
 
-    /// Debug-сборки: запускает поток watchdog. Не вышло — пул работает без него.
+    /// Debug builds: starts the watchdog thread. If that fails, the pool runs without it.
     #[cfg(debug_assertions)]
     fn start_watchdog(&mut self, prefix: &str) {
         if self.shared.watchdog.is_none() {
@@ -1148,10 +1151,10 @@ impl ThreadPool {
         }
     }
 
-    /// Снимок метрик пула: задачи, кражи, простой и парковки по воркерам, глубина очередей.
+    /// A snapshot of pool metrics: tasks, steals, idle time and parks per worker, queue depths.
     ///
-    /// Не блокирует воркеры (только чтение атомиков и длин очередей) и не влияет на
-    /// исполнение задач; аллоцирует сам снимок.
+    /// Does not block the workers (it only reads atomics and queue lengths) and does not affect
+    /// task execution; only the snapshot itself is allocated.
     ///
     /// ```
     /// use pragma_jobs::{PoolConfig, Priority, ThreadPool};
@@ -1171,8 +1174,8 @@ impl ThreadPool {
         self.shared.stats()
     }
 
-    /// Индекс воркера этого пула, на котором выполняется вызов (`None` — поток не воркер
-    /// этого пула, например главный поток внутри `scope`).
+    /// The index of this pool's worker the call runs on (`None`: the thread is not a worker
+    /// of this pool, for example the main thread inside `scope`).
     #[must_use]
     pub fn current_worker_index(&self) -> Option<usize> {
         current_worker_of(&self.shared)
@@ -1180,13 +1183,13 @@ impl ThreadPool {
             .map(|w| w.index)
     }
 
-    /// Число рабочих потоков.
+    /// Number of worker threads.
     #[must_use]
     pub fn workers(&self) -> usize {
         self.threads.len()
     }
 
-    /// Текущий поток — воркер этого пула.
+    /// Whether the current thread is a worker of this pool.
     #[must_use]
     pub fn is_worker_thread(&self) -> bool {
         current_worker_of(&self.shared).is_some_and(|w| !w.external)
@@ -1208,8 +1211,8 @@ impl Drop for ThreadPool {
         let mut joined_all = true;
         for handle in self.threads.drain(..) {
             if handle.thread().id() == me {
-                // Пул сброшен изнутри собственной задачи: себя не join-им, поток завершится
-                // сам после текущей задачи.
+                // The pool is dropped from inside its own task: do not join ourselves, the thread
+                // will exit by itself after the current task.
                 joined_all = false;
                 continue;
             }
@@ -1219,7 +1222,7 @@ impl Drop for ThreadPool {
         }
         if joined_all {
             self.shared.stopped.store(true, Ordering::SeqCst);
-            // Пара к `fence` в `Shared::push_detached`.
+            // Paired with the `fence` in `Shared::push_detached`.
             fence(Ordering::SeqCst);
         }
         if joined_all || self.shared.policy == ShutdownPolicy::Cancel {
@@ -1232,8 +1235,8 @@ impl Drop for ThreadPool {
 mod tests {
     use super::*;
 
-    /// Воркеры, которым не хватило ядер (больше воркеров, чем ядер), к возврату `new` уже
-    /// инициализированы: их одноразовые выделения не попадают в первые кадры.
+    /// Workers that got no core (more workers than cores) are already initialized by the time
+    /// `new` returns: their one-time allocations do not land in the first frames.
     #[test]
     fn new_returns_after_every_worker_is_initialized() {
         let workers = thread::available_parallelism().map_or(4, |n| n.get().saturating_mul(2));

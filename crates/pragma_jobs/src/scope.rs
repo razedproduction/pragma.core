@@ -7,7 +7,7 @@ use pragma_sync::__private::{StackSlot, TaskScope};
 use crate::pool::{Job, Shared, enter, help_once, inherited_priority, join_as_participant};
 use crate::{Grain, JobError, Priority, ThreadPool};
 
-/// Исход двух ветвей `join`: паника `a` важнее, `b` без результата — отменена.
+/// The outcome of the two `join` branches: a panic of `a` takes precedence; `b` without a result was cancelled.
 fn join_result<RA, RB>(
     (ra, rb): (std::thread::Result<RA>, Option<std::thread::Result<RB>>),
 ) -> Result<(RA, RB), JobError> {
@@ -19,8 +19,8 @@ fn join_result<RA, RB>(
     }
 }
 
-/// Span `tracing` (уровень `TRACE`) и область puffin на время операции пула `$op`.
-/// Поля span вычисляются, только если уровень включён.
+/// A `tracing` span (level `TRACE`) and a puffin scope for the duration of pool operation `$op`.
+/// The span fields are evaluated only if the level is enabled.
 macro_rules! observe {
     ($pool:expr, $op:literal) => {
         let _span = tracing::trace_span!(
@@ -34,8 +34,8 @@ macro_rules! observe {
     };
 }
 
-/// Данные области: всё заимствовано у `scope_named`, поэтому область не аллоцирует и не
-/// трогает общий для всех потоков счётчик ссылок `Arc<Shared>`.
+/// Scope data: everything is borrowed from `scope_named`, so the scope neither allocates nor
+/// touches the `Arc<Shared>` reference count shared by all threads.
 #[derive(Clone, Copy)]
 pub(crate) struct ScopeData<'a> {
     shared: &'a Arc<Shared>,
@@ -55,10 +55,10 @@ impl ScopeData<'_> {
     }
 }
 
-/// Область задач, которые могут заимствовать данные вызывающего (см. [`ThreadPool::scope`]).
+/// A scope of tasks that may borrow the caller's data (see [`ThreadPool::scope`]).
 ///
-/// `Copy`: передаётся в замыкания по значению, поэтому задачи могут порождать новые задачи
-/// той же области.
+/// `Copy`: it is passed into closures by value, so tasks can spawn new tasks
+/// in the same scope.
 pub struct Scope<'scope, 'env: 'scope> {
     inner: &'scope TaskScope<'scope, 'env, ScopeData<'scope>>,
     env: PhantomData<&'env mut &'env ()>,
@@ -81,8 +81,8 @@ impl std::fmt::Debug for Scope<'_, '_> {
 }
 
 impl<'scope> Scope<'scope, '_> {
-    /// Запускает задачу области. Паника задачи перехватывается; первая из них
-    /// возвращается из [`ThreadPool::scope`] как ошибка.
+    /// Spawns a scope task. A task panic is caught; the first one
+    /// is returned from [`ThreadPool::scope`] as an error.
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'scope,
@@ -104,8 +104,8 @@ impl<'scope> Scope<'scope, '_> {
         data.shared.push(Job::Scoped(task), data.priority);
     }
 
-    /// Задача из слота на стеке вызывающего — без аллокации. Паники не перехватывает:
-    /// замыкание в слоте обязано делать это само.
+    /// A task from a slot on the caller's stack, with no allocation. It does not catch panics:
+    /// the closure in the slot must do that itself.
     fn spawn_slot<F>(&self, slot: &'scope StackSlot<F>)
     where
         F: FnOnce() + Send + 'scope,
@@ -118,11 +118,11 @@ impl<'scope> Scope<'scope, '_> {
 }
 
 impl ThreadPool {
-    /// Область задач с заимствованием данных (без `'static`).
+    /// A scope of tasks that borrow data (no `'static` needed).
     ///
-    /// Возвращается, только когда завершены все задачи области; пока ждёт — исполняет
-    /// работу пула. Паника в `f` или в любой задаче — `Err(JobError::Panicked)`
-    /// (возвращается первая перехваченная), остальные задачи всё равно доработают.
+    /// Returns only when all tasks of the scope have finished; while waiting it runs
+    /// pool work. A panic in `f` or in any task gives `Err(JobError::Panicked)`
+    /// (the first one caught is returned); the other tasks still run to completion.
     pub fn scope<'env, F, R>(&self, f: F) -> Result<R, JobError>
     where
         F: for<'scope> FnOnce(Scope<'scope, 'env>) -> R,
@@ -164,20 +164,20 @@ impl ThreadPool {
                 .map_or(Ok(value), Err),
         }
     }
-    /// Fork-join: `a` исполняется на текущем потоке, `b` — в пуле (или тоже здесь, если его
-    /// никто не украл). Вложенные `join` не дедлочат ни при каком числе воркеров.
+    /// Fork-join: `a` runs on the current thread, `b` in the pool (or here too, if nobody
+    /// stole it). Nested `join`s do not deadlock with any number of workers.
     pub fn join<A, B, RA, RB>(&self, a: A, b: B) -> Result<(RA, RB), JobError>
     where
         A: FnOnce() -> RA,
         B: FnOnce() -> RB + Send,
         RB: Send,
     {
-        // Горячий путь — уже участник пула (вложенный `join`, задача графа).
+        // The hot path: already a pool participant (a nested `join`, a graph task).
         let (a, b) = match join_as_participant(&self.shared, a, b) {
             Ok(branches) => return join_result(branches),
             Err(branches) => branches,
         };
-        // Внешний поток: занять слот и повторить; без свободного слота — через область.
+        // An external thread: take a slot and retry; without a free slot, go through a scope.
         enter(&self.shared, move || {
             match join_as_participant(&self.shared, a, b) {
                 Ok(branches) => join_result(branches),
@@ -186,8 +186,8 @@ impl ThreadPool {
         })
     }
 
-    /// `join` для потока вне пула без свободного внешнего слота: `b` — задача области
-    /// (через глобальную очередь), ожидание — на счётчике области.
+    /// `join` for a thread outside the pool with no free external slot: `b` is a scope task
+    /// (through the global queue), and the wait is on the scope counter.
     fn join_scoped<A, B, RA, RB>(&self, a: A, b: B) -> Result<(RA, RB), JobError>
     where
         A: FnOnce() -> RA,
@@ -195,8 +195,8 @@ impl ThreadPool {
         RB: Send,
     {
         let mut rb = None;
-        // `b` лежит на стеке этой функции: `join` не аллоцирует (горячий путь вложенного
-        // параллелизма). Паника `b` перехватывается здесь же и сообщается ниже.
+        // `b` lives on this function's stack: `join` does not allocate (the hot path of nested
+        // parallelism). A panic of `b` is caught right here and reported below.
         let slot = StackSlot::new(|| rb = Some(panic::catch_unwind(AssertUnwindSafe(b))));
         let ra = self.scope_named("join a", |s| {
             s.spawn_slot(&slot);
@@ -211,7 +211,7 @@ impl ThreadPool {
         }
     }
 
-    /// Параллельно применяет `f` к каждому элементу.
+    /// Applies `f` to every element in parallel.
     pub fn parallel_for<T, F>(&self, items: &mut [T], grain: Grain, f: F) -> Result<(), JobError>
     where
         T: Send,
@@ -220,8 +220,8 @@ impl ThreadPool {
         self.parallel_for_chunks(items, grain, |_, chunk| chunk.iter_mut().for_each(&f))
     }
 
-    /// Параллельно обрабатывает чанки `items`; `f` получает смещение первого элемента чанка
-    /// и сам чанк. Разбиение — см. [`Grain`].
+    /// Processes chunks of `items` in parallel; `f` receives the offset of the chunk's first element
+    /// and the chunk itself. For the split, see [`Grain`].
     pub fn parallel_for_chunks<T, F>(
         &self,
         items: &mut [T],
@@ -245,11 +245,11 @@ impl ThreadPool {
         })
     }
 
-    /// Детерминированная редукция: `map` считает частичный результат каждого чанка
-    /// параллельно, `combine` сворачивает их на вызывающем потоке **строго в порядке чанков**.
+    /// Deterministic reduction: `map` computes the partial result of each chunk
+    /// in parallel, and `combine` folds them on the calling thread **strictly in chunk order**.
     ///
-    /// Разбиение не зависит от числа воркеров, поэтому даже неассоциативная свёртка
-    /// (сумма `f32`/`f64`) даёт одинаковый результат на любом пуле. `None` — пустой вход.
+    /// The split does not depend on the number of workers, so even a non-associative fold
+    /// (an `f32`/`f64` sum) gives the same result on any pool. `None` means an empty input.
     pub fn parallel_reduce<T, R, M, C>(
         &self,
         items: &[T],

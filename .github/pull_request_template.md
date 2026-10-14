@@ -1,13 +1,13 @@
-## Что и зачем
+## What and why
 
-<!-- Кратко: что меняется и какая веха roadmap / задача закрывается. -->
+<!-- Briefly: what changes and which roadmap milestone / task it closes. -->
 
-## Чек-лист
+## Checklist
 
-- [ ] `cargo fmt`, `clippy -D warnings`, `cargo test` проходят локально
-- [ ] `python tools/audit_workspace.py .` чист
-- [ ] Новые публичные элементы задокументированы, в `lib.rs` есть doctest
-- [ ] Тесты: unit / property / loom (для атомарного кода)
-- [ ] `unsafe` только в `pragma_sync`, каждый блок с `// SAFETY:`
-- [ ] Новая зависимость или исключение записаны в `DECISIONS.md`
-- [ ] `CHANGELOG.md` обновлён (для заметных изменений)
+- [ ] `cargo fmt`, `clippy -D warnings`, `cargo test` pass locally
+- [ ] `python tools/audit_workspace.py .` is clean
+- [ ] New public items are documented, `lib.rs` has a doctest
+- [ ] Tests: unit / property / loom (for atomic code)
+- [ ] `unsafe` only in `pragma_sync` / `pragma_sys` (`layers.toml`), every block with `// SAFETY:`
+- [ ] A new dependency or exception is recorded in `DECISIONS.md`
+- [ ] `CHANGELOG.md` is updated (for notable changes)

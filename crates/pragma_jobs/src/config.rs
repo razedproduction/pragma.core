@@ -4,28 +4,28 @@ use std::time::Duration;
 use crate::JobsError;
 use crate::sys::ThreadPriority;
 
-/// Раундов `yield` перед парковкой по умолчанию (см. [`PoolConfig::with_idle_spin`]).
+/// Default number of `yield` rounds before parking (see [`PoolConfig::with_idle_spin`]).
 pub const DEFAULT_IDLE_SPIN: u32 = 32;
 
-/// Порог watchdog по умолчанию (только debug-сборки, см. [`PoolConfig::with_watchdog`]).
+/// Default watchdog threshold (debug builds only, see [`PoolConfig::with_watchdog`]).
 pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(5);
 
-/// Верхняя граница числа воркеров — защита от опечаток в конфиге.
+/// Upper bound on the number of workers, a guard against typos in the config.
 const MAX_WORKERS: usize = 512;
 
-/// Что делать с невыполненными задачами при `Drop` пула.
+/// What to do with pending tasks when the pool is dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum ShutdownPolicy {
-    /// Воркеры дорабатывают все очереди, затем завершаются.
+    /// Workers drain all queues, then exit.
     #[default]
     Drain,
-    /// Воркеры завершаются после текущей задачи; оставшиеся задачи сбрасываются,
-    /// их хэндлы возвращают [`JobError::Cancelled`](crate::JobError::Cancelled).
+    /// Workers exit after their current task; the remaining tasks are dropped and
+    /// their handles return [`JobError::Cancelled`](crate::JobError::Cancelled).
     Cancel,
 }
 
-/// Конфигурация пула потоков.
+/// Thread pool configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolConfig {
     workers: usize,
@@ -40,7 +40,7 @@ pub struct PoolConfig {
 }
 
 impl Default for PoolConfig {
-    /// Число воркеров = логические ядра − 1 (главный поток тоже исполняет задачи), минимум 1.
+    /// Number of workers = logical cores − 1 (the main thread runs tasks too), at least 1.
     fn default() -> Self {
         let cores = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
         Self {
@@ -58,128 +58,128 @@ impl Default for PoolConfig {
 }
 
 impl PoolConfig {
-    /// Задать число рабочих потоков.
+    /// Sets the number of worker threads.
     #[must_use]
     pub fn with_workers(mut self, workers: usize) -> Self {
         self.workers = workers;
         self
     }
 
-    /// Префикс имени потоков (видно в профайлере и отладчике): `<prefix>-<index>`.
+    /// Thread name prefix (visible in the profiler and the debugger): `<prefix>-<index>`.
     #[must_use]
     pub fn with_name_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.name_prefix = prefix.into();
         self
     }
 
-    /// Размер стека рабочего потока в байтах (`None` — по умолчанию ОС).
+    /// Worker thread stack size in bytes (`None`: the OS default).
     #[must_use]
     pub fn with_stack_size(mut self, bytes: Option<usize>) -> Self {
         self.stack_size = bytes;
         self
     }
 
-    /// Сколько воркеров одновременно могут исполнять задачи
-    /// [`Priority::Background`](crate::Priority::Background)
-    /// (`None` — половина воркеров с округлением вверх).
+    /// How many workers may run [`Priority::Background`](crate::Priority::Background)
+    /// tasks at the same time
+    /// (`None`: half of the workers, rounded up).
     #[must_use]
     pub fn with_background_limit(mut self, limit: Option<usize>) -> Self {
         self.background_limit = limit;
         self
     }
 
-    /// Политика завершения при `Drop` пула.
+    /// Shutdown policy when the pool is dropped.
     #[must_use]
     pub fn with_shutdown(mut self, policy: ShutdownPolicy) -> Self {
         self.shutdown = policy;
         self
     }
 
-    /// Watchdog зависших задач (**только debug-сборки**): задача с меткой
-    /// ([`labeled`](crate::labeled) — задачи графа, `spawn`, async), исполняющаяся на потоке
-    /// пула дольше `threshold`, даёт одно предупреждение в лог (`tracing::warn!`, target
-    /// `pragma_jobs::watchdog`) с именем задачи и потока. `None` — выключен.
+    /// Watchdog for stuck tasks (**debug builds only**): a labeled task
+    /// ([`labeled`](crate::labeled): graph tasks, `spawn`, async) running on a pool thread
+    /// longer than `threshold` produces one warning in the log (`tracing::warn!`, target
+    /// `pragma_jobs::watchdog`) with the task and thread names. `None` disables it.
     ///
-    /// По умолчанию [`DEFAULT_WATCHDOG`]. В release-сборке настройка игнорируется: ни потока
-    /// watchdog, ни учёта задач нет.
+    /// Defaults to [`DEFAULT_WATCHDOG`]. In a release build the setting is ignored: there is neither
+    /// a watchdog thread nor task bookkeeping.
     #[must_use]
     pub fn with_watchdog(mut self, threshold: Option<Duration>) -> Self {
         self.watchdog = threshold;
         self
     }
 
-    /// Приоритет рабочих потоков ОС (`None` — не менять). Если ОС отказала (например,
-    /// повышение на Linux без `CAP_SYS_NICE`), воркер пишет предупреждение в лог и работает
-    /// с прежним приоритетом.
+    /// OS priority of the worker threads (`None`: leave unchanged). If the OS refuses (for example
+    /// raising it on Linux without `CAP_SYS_NICE`), the worker logs a warning and runs
+    /// with its previous priority.
     #[must_use]
     pub fn with_thread_priority(mut self, priority: Option<ThreadPriority>) -> Self {
         self.thread_priority = priority;
         self
     }
 
-    /// Привязка воркеров к логическим ядрам: воркер `i` закрепляется за ядром
-    /// `cores[i % cores.len()]` (`None` — без привязки, решает ОС). Ошибка привязки —
-    /// предупреждение в лог, воркер работает без неё.
+    /// Pins workers to logical cores: worker `i` is pinned to core
+    /// `cores[i % cores.len()]` (`None`: no pinning, the OS decides). A pinning error is
+    /// a warning in the log; the worker runs without it.
     #[must_use]
     pub fn with_affinity(mut self, cores: Option<Vec<usize>>) -> Self {
         self.affinity = cores;
         self
     }
 
-    /// Сколько раундов `yield` воркер без работы ищет её, прежде чем уснуть (после короткого
-    /// spin). Больше — быстрее подхватывается следующая волна работы (кадр, вложенный
-    /// `join`), но дольше занят CPU без дела; `0` — парковаться сразу после spin. Значение по
-    /// умолчанию [`DEFAULT_IDLE_SPIN`] подобрано по бенчам (`docs/perf.md`).
+    /// How many `yield` rounds an idle worker searches for work before going to sleep (after a short
+    /// spin). More rounds pick up the next wave of work (a frame, a nested `join`) faster, but keep
+    /// the CPU busy doing nothing for longer; `0` parks right after the spin. The default
+    /// [`DEFAULT_IDLE_SPIN`] was tuned with benchmarks (`docs/perf.md`).
     #[must_use]
     pub fn with_idle_spin(mut self, rounds: u32) -> Self {
         self.idle_spin = rounds;
         self
     }
 
-    /// Раундов `yield` перед парковкой.
+    /// `yield` rounds before parking.
     #[must_use]
     pub fn idle_spin(&self) -> u32 {
         self.idle_spin
     }
 
-    /// Порог watchdog (действует только в debug-сборках).
+    /// The watchdog threshold (effective in debug builds only).
     #[must_use]
     pub fn watchdog(&self) -> Option<Duration> {
         self.watchdog
     }
 
-    /// Приоритет рабочих потоков.
+    /// Priority of the worker threads.
     #[must_use]
     pub fn thread_priority(&self) -> Option<ThreadPriority> {
         self.thread_priority
     }
 
-    /// Ядро для воркера `index`, если задана привязка.
+    /// The core for worker `index`, if pinning is configured.
     #[must_use]
     pub fn core_for(&self, index: usize) -> Option<usize> {
         let cores = self.affinity.as_deref()?;
         cores.get(index.checked_rem(cores.len())?).copied()
     }
 
-    /// Число рабочих потоков.
+    /// Number of worker threads.
     #[must_use]
     pub fn workers(&self) -> usize {
         self.workers
     }
 
-    /// Префикс имени потоков.
+    /// Thread name prefix.
     #[must_use]
     pub fn name_prefix(&self) -> &str {
         &self.name_prefix
     }
 
-    /// Размер стека рабочего потока.
+    /// Worker thread stack size.
     #[must_use]
     pub fn stack_size(&self) -> Option<usize> {
         self.stack_size
     }
 
-    /// Лимит воркеров для фоновых задач с учётом значения по умолчанию.
+    /// The worker limit for background tasks, with the default applied.
     #[must_use]
     pub fn background_limit(&self) -> usize {
         self.background_limit
@@ -187,13 +187,13 @@ impl PoolConfig {
             .max(1)
     }
 
-    /// Политика завершения.
+    /// The shutdown policy.
     #[must_use]
     pub fn shutdown(&self) -> ShutdownPolicy {
         self.shutdown
     }
 
-    /// Проверяет конфигурацию до запуска потоков.
+    /// Validates the configuration before threads are started.
     pub fn validate(self) -> Result<Self, JobsError> {
         if self.workers == 0 {
             return Err(JobsError::InvalidConfig {

@@ -1,8 +1,8 @@
-//! Watchdog зависших задач: в debug — одно предупреждение с именем задачи, в release — ничего.
+//! The stuck-task watchdog: in debug, one warning with the task name; in release, nothing.
 //!
-//! Отдельный бинарник с одним тестом: подписчик `tracing` глобальный (предупреждение пишет
-//! поток watchdog). Release-ветку проверяет CI: `cargo test -p pragma_jobs --release --test watchdog`.
-// Тестовый код: паника = провал теста.
+//! A separate binary with a single test: the `tracing` subscriber is global (the warning is written by
+//! the watchdog thread). CI checks the release branch: `cargo test -p pragma_jobs --release --test watchdog`.
+// Test code: a panic is a test failure.
 #![allow(clippy::unwrap_used)]
 
 use std::fmt::{self, Write as _};
@@ -16,7 +16,7 @@ use tracing::{self, Event, Metadata, Subscriber};
 
 static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Подписчик, который собирает предупреждения watchdog как строки `поле=значение`.
+/// A subscriber that collects watchdog warnings as `field=value` strings.
 struct Capture;
 
 struct Fields(String);
@@ -67,15 +67,15 @@ fn hung_task_is_reported_once() {
     )
     .unwrap();
 
-    // Быстрые задачи предупреждений не дают.
+    // Fast tasks produce no warnings.
     for _ in 0..100 {
         pool.spawn(Priority::Normal, || ()).join().unwrap();
     }
     assert!(warnings().is_empty(), "{:?}", warnings());
 
-    // «Зависшая» задача: в 8 раз дольше порога, но предупреждение одно.
-    // Ждём без `join`: тот помогает исполнять задачи и мог бы сам взять эту задачу на главный
-    // поток (тогда предупреждение пришло бы от `external-0`, а не от воркера).
+    // A "stuck" task: 8 times longer than the threshold, but only one warning.
+    // Wait without `join`: it helps run tasks and could take this task onto the main thread
+    // itself (then the warning would come from `external-0`, not from a worker).
     let stuck = pool.spawn_named("stuck-asset-decode", Priority::Normal, || {
         std::thread::sleep(Duration::from_millis(400));
     });

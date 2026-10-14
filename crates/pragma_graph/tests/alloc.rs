@@ -1,8 +1,8 @@
-//! Критерий M2: граф из ~50 задач исполняется за кадр без аллокаций (в установившемся режиме).
-//! M4: и с подписчиком `tracing` (span на задачу), и с метками задач для крэш-контекста.
+//! M2 criterion: a graph of ~50 tasks runs a frame without allocations (in the steady state).
+//! M4: also with a `tracing` subscriber (a span per task) and with task labels for crash context.
 //!
-//! Отдельный тестовый бинарник со считающим глобальным аллокатором (DECISIONS.md #19).
-// Тестовый код: паника = провал теста.
+//! A separate test binary with a counting global allocator (DECISIONS.md #19).
+// Test code: a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -13,7 +13,7 @@ use pragma_jobs::{PoolConfig, ThreadPool, current_task};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{self, Event, Metadata, Subscriber};
 
-/// Системный аллокатор, считающий аллокации, пока поднят `COUNTING`.
+/// The system allocator, counting allocations while `COUNTING` is raised.
 struct Counting;
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
@@ -25,29 +25,29 @@ fn count() {
     }
 }
 
-// SAFETY: все методы делегируют `System` с теми же аргументами и только добавляют счётчик,
-// поэтому контракт `GlobalAlloc` выполняется ровно так же, как у `System`.
+// SAFETY: all methods delegate to `System` with the same arguments and only add a counter,
+// so the `GlobalAlloc` contract is upheld exactly as it is by `System`.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         count();
-        // SAFETY: контракт `alloc` передаётся вызывающим без изменений.
+        // SAFETY: the `alloc` contract is passed through from the caller unchanged.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         count();
-        // SAFETY: см. `alloc`.
+        // SAFETY: see `alloc`.
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         count();
-        // SAFETY: `ptr` выделен этим же аллокатором (то есть `System`), контракт передаётся как есть.
+        // SAFETY: `ptr` was allocated by this same allocator (i.e. `System`); the contract is passed through as is.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` выделен `System` через этот аллокатор.
+        // SAFETY: `ptr` was allocated by `System` through this allocator.
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -57,7 +57,7 @@ static GLOBAL: Counting = Counting;
 
 struct R<const N: usize>(Vec<u64>);
 
-/// Задачи, в которых метка текущей задачи не совпала с задачей графа.
+/// Tasks in which the current task label did not match the graph task.
 static WRONG_LABEL: AtomicUsize = AtomicUsize::new(0);
 
 fn task<const W: usize, const RD: usize>(g: &mut FrameGraphBuilder, name: String) {
@@ -65,7 +65,7 @@ fn task<const W: usize, const RD: usize>(g: &mut FrameGraphBuilder, name: String
         name,
         |t| t.writes::<R<W>>().reads::<R<RD>>(),
         |ctx: &TaskContext<'_>| -> Result<(), GraphError> {
-            // Тот же запрос, что делает panic hook: без аллокаций.
+            // The same query a panic hook makes: no allocations.
             let labeled =
                 current_task(|t| t.is_some_and(|t| t.kind() == "graph" && t.name() == ctx.name()));
             if !labeled {
@@ -80,7 +80,7 @@ fn task<const W: usize, const RD: usize>(g: &mut FrameGraphBuilder, name: String
     );
 }
 
-/// 50 задач над 10 ресурсами; конфликты упорядочены по объявлению (`ordered`).
+/// 50 tasks over 10 resources; conflicts are ordered by declaration (`ordered`).
 fn graph() -> FrameGraph {
     let mut g = FrameGraph::builder().ordered();
     for i in 0..5 {
@@ -113,8 +113,8 @@ fn resources() -> Resources {
     r
 }
 
-/// Подписчик `tracing`, который считает span и сам не аллоцирует: проверяет, что
-/// инструментирование кадра (span на задачу) не добавляет аллокаций.
+/// A `tracing` subscriber that counts spans and does not allocate itself: it checks that
+/// frame instrumentation (a span per task) adds no allocations.
 struct CountingSubscriber;
 
 static SPANS: AtomicU64 = AtomicU64::new(0);
@@ -133,8 +133,8 @@ impl Subscriber for CountingSubscriber {
     fn exit(&self, _: &Id) {}
 }
 
-/// Одна функция-тест: счётчик и подписчик глобальные, параллельные тесты в этом бинарнике
-/// их бы портили. Сначала без подписчика, затем с ним.
+/// A single test function: the counter and the subscriber are global, and parallel tests in this
+/// binary would spoil them. First without a subscriber, then with one.
 #[test]
 fn frame_run_does_not_allocate() {
     frames_without_allocations("no subscriber");
@@ -152,8 +152,8 @@ fn frame_run_does_not_allocate() {
 static HOOK_ALLOCATIONS: AtomicUsize = AtomicUsize::new(usize::MAX);
 static HOOK_SAW_CULPRIT: AtomicBool = AtomicBool::new(false);
 
-/// Panic hook читает метку виновника (задачи графа), а считающий аллокатор видит ноль
-/// аллокаций на время чтения.
+/// The panic hook reads the culprit's label (a graph task), and the counting allocator sees zero
+/// allocations during the read.
 fn panic_hook_reads_culprit_without_allocating() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {
@@ -187,7 +187,7 @@ fn frames_without_allocations(mode: &str) {
         let mut graph = graph();
         assert_eq!(graph.len(), 50);
         let mut res = resources();
-        // Прогрев: кэши потоков (счётчики областей, эпохи crossbeam) заполняются в первых кадрах.
+        // Warm-up: per-thread caches (scope counters, crossbeam epochs) fill up in the first frames.
         for _ in 0..200 {
             graph.run(&pool, &mut res).unwrap();
         }

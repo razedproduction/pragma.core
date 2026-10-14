@@ -1,4 +1,4 @@
-//! Хеш каждого тика не зависит от числа воркеров и от момента завершения загрузки.
+//! The hash of every tick depends neither on the number of workers nor on when the load finishes.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use std::time::Duration;
@@ -48,7 +48,7 @@ fn background_load_affects_state_from_apply_tick() {
         ..base
     })
     .unwrap();
-    // До тика применения состояния совпадают, после — расходятся: загрузка реально участвует.
+    // Before the apply tick the states match, after it they diverge: the load really takes part.
     assert_eq!(applied.hashes[..10], never.hashes[..10]);
     assert_ne!(applied.hashes[10..], never.hashes[10..]);
 }

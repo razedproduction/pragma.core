@@ -1,53 +1,53 @@
 use std::any::Any;
 
-/// Ошибки жизненного цикла пула (создание, конфигурация).
+/// Errors of the pool lifecycle (creation, configuration).
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum JobsError {
-    /// Некорректная конфигурация пула.
+    /// Invalid pool configuration.
     #[error("invalid pool config: {reason}")]
     #[non_exhaustive]
     InvalidConfig {
-        /// Что именно не так.
+        /// What exactly is wrong.
         reason: &'static str,
     },
-    /// ОС отказала в создании рабочего потока.
+    /// The OS refused to create a worker thread.
     #[error("failed to spawn worker thread `{name}`")]
     #[non_exhaustive]
     SpawnFailed {
-        /// Имя потока.
+        /// Thread name.
         name: String,
-        /// Исходная ошибка ОС.
+        /// The underlying OS error.
         #[source]
         source: std::io::Error,
     },
 }
 
-/// Ошибки исполнения задачи: возвращаются из `join`/`scope`/`parallel_*` и [`JobHandle::join`].
+/// Task execution errors: returned from `join`/`scope`/`parallel_*` and [`JobHandle::join`].
 ///
-/// Отделены от [`JobsError`] (DECISIONS.md #13): исход задачи можно клонировать, сравнивать
-/// и пересылать между потоками, а ошибка создания пула несёт `std::io::Error`.
+/// Kept separate from [`JobsError`] (DECISIONS.md #13): a task outcome can be cloned, compared
+/// and sent between threads, while a pool creation error carries a `std::io::Error`.
 ///
 /// [`JobHandle::join`]: crate::JobHandle::join
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum JobError {
-    /// Задача запаниковала; паника перехвачена, воркер продолжает работу.
+    /// The task panicked; the panic was caught and the worker keeps running.
     #[error("job `{job}` panicked: {message}")]
     #[non_exhaustive]
     Panicked {
-        /// Какая задача (например, `spawn`, `join b`, `parallel_for chunk`).
+        /// Which task (for example `spawn`, `join b`, `parallel_for chunk`).
         job: String,
-        /// Сообщение паники, если оно было строкой.
+        /// The panic message, if it was a string.
         message: String,
     },
-    /// Задача сброшена без выполнения (пул остановлен с [`ShutdownPolicy::Cancel`]).
+    /// The task was dropped without running (the pool was stopped with [`ShutdownPolicy::Cancel`]).
     ///
     /// [`ShutdownPolicy::Cancel`]: crate::ShutdownPolicy::Cancel
     #[error("job `{job}` was cancelled before it ran")]
     #[non_exhaustive]
     Cancelled {
-        /// Какая задача.
+        /// Which task.
         job: String,
     },
 }

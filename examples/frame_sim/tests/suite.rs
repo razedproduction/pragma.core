@@ -1,6 +1,6 @@
-//! Обязательный набор детерминизма в debug-сборке: здесь watchdog реально работает (порог
-//! 1 мс срабатывает), а подписчик `tracing` включает span на каждую задачу — хеш не меняется.
-//! Тот же набор в release на полном размере — `frame_sim --suite` в CI.
+//! The mandatory determinism suite in a debug build: here the watchdog actually works (the
+//! 1 ms threshold fires), and the `tracing` subscriber enables a span per task; the hash does not change.
+//! The same suite in release at full size is `frame_sim --suite` in CI.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -32,7 +32,7 @@ impl Subscriber for CountingSubscriber {
     fn exit(&self, _: &Id) {}
 }
 
-/// Одна функция-тест: подписчик глобальный. Все прогоны — с подписчиком, кроме эталона.
+/// A single test function: the subscriber is global. All runs have the subscriber, except the reference.
 #[test]
 fn suite_hashes_match_in_debug() {
     let scenarios = determinism_suite(16, 4_000, &[1, 2, 3], Duration::from_millis(40));

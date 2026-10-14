@@ -1,8 +1,8 @@
-//! Стоимость планирования async-задач в пул (долг M3 → M4b, DECISIONS #31).
+//! The cost of scheduling async tasks into the pool (debt M3 → M4b, DECISIONS #31).
 //!
-//! Каждое планирование `Runnable` кладёт в пул `Box` с замыканием (`Spawner::spawn_detached`).
-//! Бенч сравнивает полную цену перепланирования (`yield_now` → пробуждение → пул → `poll`) с
-//! ценой самого `Box`. `cargo bench -p pragma_async`.
+//! Every `Runnable` scheduling pushes a `Box` with a closure into the pool (`Spawner::spawn_detached`).
+//! The bench compares the full cost of rescheduling (`yield_now` → wakeup → pool → `poll`) with
+//! the cost of the `Box` itself. `cargo bench -p pragma_async`.
 #![allow(missing_docs, clippy::unwrap_used)]
 
 use std::hint::black_box;
@@ -18,7 +18,7 @@ fn bench_schedule(c: &mut Criterion) {
     let exec = Executor::new(&pool, AsyncConfig::default()).unwrap();
     let mut g = c.benchmark_group("async");
 
-    // Одна задача перепланирует себя `YIELDS` раз: на каждый раз — один `Box` в пуле.
+    // One task reschedules itself `YIELDS` times: one `Box` in the pool each time.
     g.throughput(Throughput::Elements(YIELDS));
     g.bench_function("reschedule_x1000", |b| {
         b.iter(|| {
@@ -32,7 +32,7 @@ fn bench_schedule(c: &mut Criterion) {
         });
     });
 
-    // 1000 коротких задач: создание задачи `async-task` + одно планирование каждой.
+    // 1000 short tasks: creating an `async-task` task + one scheduling of each.
     g.bench_function("spawn_x1000", |b| {
         b.iter(|| {
             let handles: Vec<_> = (0..YIELDS)
@@ -44,8 +44,8 @@ fn bench_schedule(c: &mut Criterion) {
         });
     });
 
-    // Цена самого `Box<dyn FnOnce>` (аллокация + вызов + освобождение) — та часть
-    // перепланирования, которую можно было бы убрать.
+    // The cost of the `Box<dyn FnOnce>` itself (allocation + call + deallocation): the part
+    // of rescheduling that could be eliminated.
     g.bench_function("box_dyn_fnonce_x1000", |b| {
         b.iter(|| {
             for i in 0..YIELDS {

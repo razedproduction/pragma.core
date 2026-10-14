@@ -11,7 +11,7 @@ repository.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 
-# Системные FFI-привязки без сборки C (DECISIONS.md #4, #27).
+# System FFI bindings without building C (DECISIONS.md #4, #27).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
 

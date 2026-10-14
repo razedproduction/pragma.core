@@ -1,6 +1,6 @@
-# Как вносить изменения
+# Contributing
 
-## Перед PR
+## Before a PR
 
 ```bash
 cargo fmt --all
@@ -9,46 +9,46 @@ cargo test --workspace --all-features
 python tools/audit_workspace.py .
 ```
 
-Если менялся `pragma_sync`, дополнительно:
+If `pragma_sync` changed, also:
 
 ```bash
 cargo +nightly miri test -p pragma_sync
 RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests
 ```
 
-Если менялся `pragma_jobs` — долгие стресс-тесты (в CI — ночью) и бенчи против `rayon`:
+If `pragma_jobs` changed: the long stress tests (nightly in CI) and the benches against `rayon`:
 
 ```bash
 cargo test -p pragma_jobs --release --test stress -- --ignored
 cargo bench -p pragma_jobs
 ```
 
-Если менялся `pragma_graph` — бенч кадра и fuzz построителя (cargo-fuzz, nightly, Linux;
-отдельный workspace `fuzz/`). Тест «кадр без аллокаций» входит в обычный `cargo test`.
+If `pragma_graph` changed: the frame bench and the builder fuzzer (cargo-fuzz, nightly, Linux;
+a separate `fuzz/` workspace). The "allocation-free frame" test is part of the regular `cargo test`.
 
 ```bash
 cargo bench -p pragma_graph
 cargo +nightly fuzz run graph_build -- -max_total_time=60
 ```
 
-## Контракт модуля
+## Module contract
 
-Новый крейт или модуль считается готовым, когда у него есть:
+A new crate or module is considered done when it has:
 
-1. **Место в слое**: запись в `layers.toml`, зависимости только на нижние слои.
-2. **Типизированная ошибка**: `#[non_exhaustive]` enum через `thiserror`, без `unwrap`/`expect`/`panic!`/индексации.
-3. **Тесты**: unit-тесты и property-тесты на инварианты; loom-модель для атомарного протокола.
-4. **Feature-флаг** в фасаде `pragma_core`, если модуль опционален.
-5. **Документация**: `//!` в `lib.rs` с примером-doctest; `missing_docs` чист.
-6. **Бенчмарк** (`criterion`), если модуль в горячем пути.
+1. **A place in a layer**: an entry in `layers.toml`, dependencies only on lower layers.
+2. **A typed error**: a `#[non_exhaustive]` enum via `thiserror`, no `unwrap`/`expect`/`panic!`/indexing.
+3. **Tests**: unit tests and property tests for invariants; a loom model for an atomic protocol.
+4. **A feature flag** in the `pragma_core` facade, if the module is optional.
+5. **Documentation**: `//!` in `lib.rs` with a doctest example; `missing_docs` is clean.
+6. **A benchmark** (`criterion`), if the module is on a hot path.
 
-## Зависимости
+## Dependencies
 
-- Только pure Rust (`deny.toml`). Перед добавлением выполните `cargo tree -e build -i cc` и прогоните аудит.
-- Версия — только в `[workspace.dependencies]`, в крейте `{ workspace = true }`.
-- Новая зависимость или исключение из правил — строка в `DECISIONS.md`.
+- Pure Rust only (`deny.toml`). Before adding one, run `cargo tree -e build -i cc` and the audit.
+- The version goes only into `[workspace.dependencies]`; in the crate, `{ workspace = true }`.
+- A new dependency or an exception to the rules means a row in `DECISIONS.md`.
 
-## Коммиты
+## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/): `feat(jobs): ...`, `fix(sync): ...`,
-`docs: ...`, `ci: ...`, `refactor(graph): ...`. Ломающее изменение — `feat(jobs)!: ...` плюс запись в `CHANGELOG.md`.
+`docs: ...`, `ci: ...`, `refactor(graph): ...`. A breaking change is `feat(jobs)!: ...` plus an entry in `CHANGELOG.md`.

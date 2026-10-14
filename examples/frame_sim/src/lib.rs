@@ -1,24 +1,24 @@
-//! `frame_sim` — вертикальный срез `pragma.core` (веха M3): headless-цикл с фиксированным
-//! шагом через все слои ядра.
+//! `frame_sim` is the vertical slice of `pragma.core` (milestone M3): a headless fixed-step
+//! loop through every layer of the core.
 //!
-//! - **Пул** (`pragma_jobs`): каждая система распараллеливает работу над сущностями.
-//! - **Граф кадра** (`pragma_graph`): 9 систем с объявленным доступом к ресурсам.
-//! - **Async** (`pragma_async`): фоновая «загрузка» карты трения — синхронное «чтение файла»
-//!   в blocking-пуле, декодирование на воркере пула. Результат забирается мостом
-//!   [`AsyncHandle::poll_ready`] в начале кадра.
-//! - **Хеш состояния** на каждом тике — тоже система графа (детерминированная редукция).
+//! - **Pool** (`pragma_jobs`): every system parallelizes its work over the entities.
+//! - **Frame graph** (`pragma_graph`): 9 systems with declared resource access.
+//! - **Async** (`pragma_async`): background "loading" of a friction map: a synchronous "file read"
+//!   in the blocking pool, decoding on a pool worker. The result is picked up by the
+//!   [`AsyncHandle::poll_ready`] bridge at the start of a frame.
+//! - **State hash** on every tick, also a graph system (a deterministic reduction).
 //!
-//! ## Детерминизм
+//! ## Determinism
 //!
-//! Хеш тика зависит только от конфигурации, а не от числа воркеров и не от того, когда
-//! закончилась загрузка:
+//! The tick hash depends only on the configuration, not on the number of workers nor on when
+//! the load finished:
 //!
-//! - работа над сущностями не зависит от разбиения (поэлементная) или сворачивается в порядке
-//!   чанков (`parallel_reduce`), а разбиение зависит только от длины;
-//! - конфликтующие системы упорядочены графом;
-//! - загрузка **применяется ровно на тике `load_apply_tick`**: готовый раньше результат
-//!   ждёт в буфере, а если к этому тику он не готов, главный поток дожидается его **между
-//!   кадрами** ([`AsyncHandle::wait`] вне работы пула), а не внутри задачи кадра.
+//! - work over entities either does not depend on the split (element-wise) or is folded in chunk
+//!   order (`parallel_reduce`), and the split depends only on the length;
+//! - conflicting systems are ordered by the graph;
+//! - the load is **applied exactly at tick `load_apply_tick`**: a result that is ready earlier
+//!   waits in a buffer, and if it is not ready by that tick, the main thread waits for it **between
+//!   frames** ([`AsyncHandle::wait`] outside pool work), not inside a frame task.
 //!
 //! ```
 //! use frame_sim::{SimConfig, run};
@@ -39,18 +39,18 @@ use pragma_core::jobs::{
 };
 use pragma_core::tasks::{AsyncConfig, AsyncError, AsyncHandle, Executor};
 
-/// Сторона квадратного мира.
+/// The side of the square world.
 const WORLD: f32 = 1024.0;
-/// Сетка плотности и карты трения: `GRID × GRID` клеток.
+/// The density and friction map grid: `GRID × GRID` cells.
 const GRID: usize = 64;
 const CELLS: usize = GRID * GRID;
 const CELL: f32 = WORLD / GRID as f32;
 const CENTER: f32 = WORLD / 2.0;
-/// Фиксированный шаг симуляции.
+/// The fixed simulation step.
 const DT: f32 = 1.0 / 60.0;
 const PULL: f32 = 0.6;
 const SWIRL: f32 = 40.0;
-/// Трение, пока карта не загружена.
+/// Friction while the map is not loaded.
 const DEFAULT_FRICTION: f32 = 0.995;
 const MAX_HEALTH: f32 = 100.0;
 const HAZARD_DPS: f32 = 30.0;
@@ -60,50 +60,50 @@ const REGEN: f32 = 2.0;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// Ошибки симуляции.
+/// Simulation errors.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SimError {
-    /// Не удалось создать пул.
+    /// Failed to create the pool.
     #[error("thread pool: {0}")]
     Pool(#[from] JobsError),
-    /// Ошибка сборки или кадра графа.
+    /// A graph build or frame error.
     #[error("frame graph: {0}")]
     Graph(#[from] GraphError),
-    /// Ошибка фоновой загрузки.
+    /// A background load error.
     #[error("background load: {0}")]
     Async(#[from] AsyncError),
-    /// Ошибка задачи пула.
+    /// A pool task error.
     #[error("job: {0}")]
     Job(#[from] JobError),
-    /// Некорректная конфигурация.
+    /// Invalid configuration.
     #[error("invalid config: {0}")]
     Config(&'static str),
-    /// Ресурс пропал из хранилища (баг примера).
+    /// A resource disappeared from the storage (a bug in the example).
     #[error("resource `{0}` is missing")]
     Missing(&'static str),
 }
 
-/// Параметры прогона.
+/// Run parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimConfig {
-    /// Число сущностей.
+    /// Number of entities.
     pub entities: usize,
-    /// Число тиков.
+    /// Number of ticks.
     pub ticks: u64,
-    /// Воркеры пула.
+    /// Pool workers.
     pub workers: usize,
-    /// Тик (с нуля), в начале которого применяется загруженная карта трения.
+    /// The tick (zero-based) at the start of which the loaded friction map is applied.
     pub load_apply_tick: u64,
-    /// Искусственная задержка «чтения файла» в blocking-пуле.
+    /// An artificial "file read" delay in the blocking pool.
     pub load_latency: Duration,
-    /// Seed начального состояния и карты.
+    /// Seed of the initial state and the map.
     pub seed: u64,
-    /// Раундов `yield` перед парковкой воркера ([`PoolConfig::with_idle_spin`]).
+    /// `yield` rounds before a worker parks ([`PoolConfig::with_idle_spin`]).
     pub idle_spin: u32,
-    /// Порог watchdog ([`PoolConfig::with_watchdog`]; действует только в debug-сборке).
+    /// The watchdog threshold ([`PoolConfig::with_watchdog`]; effective in debug builds only).
     pub watchdog: Option<Duration>,
-    /// Снимать [`PoolStats`](pragma_core::jobs::PoolStats) после каждого кадра.
+    /// Take a [`PoolStats`](pragma_core::jobs::PoolStats) snapshot after every frame.
     pub sample_stats: bool,
 }
 
@@ -123,25 +123,25 @@ impl Default for SimConfig {
     }
 }
 
-/// Итог прогона.
+/// The outcome of a run.
 #[derive(Debug, Clone)]
 pub struct SimReport {
-    /// Хеш состояния после каждого тика.
+    /// The state hash after every tick.
     pub hashes: Vec<u64>,
-    /// Тик, в начале которого мост увидел готовую загрузку (зависит от расписания —
-    /// только для диагностики, в хеш не входит).
+    /// The tick at the start of which the bridge saw the load ready (depends on scheduling;
+    /// for diagnostics only, not part of the hash).
     pub load_ready_tick: Option<u64>,
-    /// К тику применения загрузка не была готова и главный поток ждал её между кадрами.
+    /// The load was not ready by the apply tick, and the main thread waited for it between frames.
     pub load_waited: bool,
-    /// Время прогона.
+    /// Run time.
     pub elapsed: Duration,
-    /// Задач пула по последнему снимку `PoolStats` (только при `sample_stats`; в хеш не
-    /// входит).
+    /// Pool tasks according to the last `PoolStats` snapshot (only with `sample_stats`; not part of
+    /// the hash).
     pub stats_executed: Option<u64>,
 }
 
 impl SimReport {
-    /// Хеш после последнего тика.
+    /// The hash after the last tick.
     #[must_use]
     pub fn final_hash(&self) -> Option<u64> {
         self.hashes.last().copied()
@@ -167,12 +167,12 @@ struct Hazard {
     radius: f32,
 }
 
-/// Карта трения по клеткам (результат фоновой загрузки); пустая — трение по умолчанию.
+/// Per-cell friction map (the result of the background load); empty means the default friction.
 struct Terrain {
     friction: Vec<f32>,
 }
 
-/// Число сущностей в клетке (по положению после интегрирования).
+/// Number of entities per cell (by position after integration).
 struct Grid(Vec<u32>);
 
 struct Stats {
@@ -183,14 +183,14 @@ struct Stats {
 
 struct StateHash(u64);
 
-/// Индекс клетки сетки для точки мира.
+/// The grid cell index for a world point.
 fn cell([x, y]: [f32; 2]) -> usize {
     let cx = ((x / CELL) as usize).min(GRID.saturating_sub(1));
     let cy = ((y / CELL) as usize).min(GRID.saturating_sub(1));
     cy.saturating_mul(GRID).saturating_add(cx)
 }
 
-/// splitmix64: детерминированный поток чисел для начального состояния.
+/// splitmix64: a deterministic number stream for the initial state.
 fn splitmix(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
@@ -254,7 +254,7 @@ fn clock(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Опасная зона движется по окружности вокруг центра.
+/// The hazard zone moves in a circle around the center.
 fn hazard(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let tick = ctx.read::<Clock>()?.tick;
     let angle = (tick % 3600) as f32 * 0.01;
@@ -263,7 +263,7 @@ fn hazard(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Притяжение к центру + вихрь, трение по карте, торможение в толпе (сетка прошлого тика).
+/// Pull towards the center + swirl, map friction, slowdown in crowds (the previous tick's grid).
 fn forces(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let terrain = ctx.read::<Terrain>()?;
     let grid = ctx.read::<Grid>()?;
@@ -299,7 +299,7 @@ fn reflect(p: f32, v: f32) -> (f32, f32) {
     }
 }
 
-/// Интегрирование и отражение от границ мира.
+/// Integration and reflection off the world boundaries.
 fn integrate(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let mut bodies = ctx.write::<Bodies>()?;
     ctx.pool()
@@ -314,7 +314,7 @@ fn integrate(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Плотность по клеткам: гистограммы чанков складываются в порядке чанков.
+/// Per-cell density: chunk histograms are summed in chunk order.
 fn grid(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let bodies = ctx.read::<Bodies>()?;
     let counts = ctx.pool().parallel_reduce(
@@ -344,7 +344,7 @@ fn grid(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Урон в опасной зоне и в переполненных клетках.
+/// Damage in the hazard zone and in overcrowded cells.
 fn damage(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let bodies = ctx.read::<Bodies>()?;
     let grid = ctx.read::<Grid>()?;
@@ -376,7 +376,7 @@ fn damage(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Восстановление здоровья живых сущностей.
+/// Health regeneration of living entities.
 fn regen(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let mut health = ctx.write::<Health>()?;
     ctx.pool().parallel_for(&mut health.0, Grain::Auto, |h| {
@@ -387,7 +387,7 @@ fn regen(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Сводка: суммарное здоровье (f64, свёртка в порядке чанков), живые, пик плотности.
+/// Summary: total health (f64, folded in chunk order), alive count, peak density.
 fn stats(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let health = ctx.read::<Health>()?;
     let grid = ctx.read::<Grid>()?;
@@ -418,8 +418,8 @@ fn stats(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     Ok(())
 }
 
-/// Хеш всего состояния: FNV-1a по 32-битным словам внутри чанка, хеши чанков — в порядке
-/// чанков.
+/// The hash of the whole state: FNV-1a over 32-bit words within a chunk, chunk hashes combined in
+/// chunk order.
 fn hash(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
     let tick = ctx.read::<Clock>()?.tick;
     let bodies = ctx.read::<Bodies>()?;
@@ -521,12 +521,12 @@ fn build_graph() -> Result<FrameGraph, GraphError> {
     g.build()
 }
 
-/// Граф систем симуляции (для отладки: `to_mermaid()`/`to_dot()`).
+/// The graph of simulation systems (for debugging: `to_mermaid()`/`to_dot()`).
 pub fn graph() -> Result<FrameGraph, SimError> {
     Ok(build_graph()?)
 }
 
-/// Синтетический «файл» карты трения: байт на клетку.
+/// A synthetic friction map "file": one byte per cell.
 fn read_terrain_file(seed: u64, latency: Duration) -> Vec<u8> {
     if !latency.is_zero() {
         std::thread::sleep(latency);
@@ -537,7 +537,7 @@ fn read_terrain_file(seed: u64, latency: Duration) -> Vec<u8> {
         .collect()
 }
 
-/// «Декодирование» карты: байт → трение в `[0.985, 0.999]`.
+/// "Decoding" the map: byte → friction in `[0.985, 0.999]`.
 fn decode_terrain(raw: &[u8]) -> Terrain {
     Terrain {
         friction: raw
@@ -547,7 +547,7 @@ fn decode_terrain(raw: &[u8]) -> Terrain {
     }
 }
 
-/// Фоновая загрузка: синхронное чтение — в blocking-пуле, декодирование — на воркере пула.
+/// Background loading: the synchronous read in the blocking pool, decoding on a pool worker.
 fn start_load(
     exec: &Executor,
     seed: u64,
@@ -560,7 +560,7 @@ fn start_load(
     })
 }
 
-/// Прогоняет симуляцию и возвращает хеш состояния после каждого тика.
+/// Runs the simulation and returns the state hash after every tick.
 pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
     if config.ticks == 0 {
         return Err(SimError::Config("ticks must be >= 1"));
@@ -584,8 +584,8 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
     let mut hashes = Vec::with_capacity(usize::try_from(config.ticks).unwrap_or(0));
 
     for tick in 0..config.ticks {
-        // Мост «async → кадр»: неблокирующая проверка в начале кадра. Готовый результат
-        // ждёт в буфере до тика применения — момент готовности на состояние не влияет.
+        // The "async → frame" bridge: a non-blocking check at the start of the frame. A ready result
+        // waits in a buffer until the apply tick, so the moment it became ready does not affect the state.
         if let Some(handle) = loading.as_mut()
             && let Some(result) = handle.poll_ready()
         {
@@ -597,7 +597,7 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
             let terrain = match staged.take() {
                 Some(terrain) => terrain,
                 None => {
-                    // Не успела: ждём между кадрами, вне работы пула.
+                    // Not ready in time: wait between frames, outside pool work.
                     load_waited = true;
                     let handle = loading.take().ok_or(SimError::Missing("terrain load"))?;
                     handle.wait()??
@@ -617,7 +617,7 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
             stats_executed = Some(pool.stats().executed());
         }
     }
-    // Незабранная загрузка (тик применения за пределами прогона) отменяется сбросом хэндла.
+    // A load that was never picked up (the apply tick lies beyond the run) is cancelled by dropping the handle.
     drop(loading);
     Ok(SimReport {
         hashes,
@@ -628,37 +628,37 @@ pub fn run(config: &SimConfig) -> Result<SimReport, SimError> {
     })
 }
 
-/// Один прогон набора детерминизма.
+/// One run of the determinism suite.
 #[derive(Debug, Clone)]
 pub struct SuiteRun {
-    /// Метка для отчёта.
+    /// A label for the report.
     pub label: String,
-    /// Конфигурация прогона.
+    /// The run configuration.
     pub config: SimConfig,
-    /// Прогон с подписчиком `tracing`: такие прогоны исполняются после остальных, когда
-    /// глобальный подписчик уже установлен.
+    /// A run with a `tracing` subscriber: such runs execute after the others, once the
+    /// global subscriber has been installed.
     pub traced: bool,
 }
 
-/// Сценарий набора: все прогоны обязаны дать одинаковый хеш на каждом тике.
+/// A suite scenario: all runs must produce the same hash on every tick.
 #[derive(Debug, Clone)]
 pub struct Scenario {
-    /// Имя сценария.
+    /// The scenario name.
     pub name: &'static str,
-    /// Прогоны; первый — эталон.
+    /// The runs; the first one is the reference.
     pub runs: Vec<SuiteRun>,
 }
 
-/// Обязательный набор детерминизма (веха M5).
+/// The mandatory determinism suite (milestone M5).
 ///
-/// Сценарии различаются seed, числом сущностей (включая пустой мир и нечётное число) и тиком
-/// применения загрузки (раньше готовности, на первом тике, за пределами прогона). Каждый
-/// сценарий прогоняется на каждом числе воркеров из `workers` с мгновенной и запаздывающей
-/// (`slow_load`) загрузкой, а на наибольшем числе воркеров — ещё и с вариантами окружения,
-/// которые не должны влиять на хеш: `idle_spin` 0 и 128, снимки `PoolStats` после каждого
-/// кадра, watchdog выключен и с порогом 1 мс (в debug-сборке срабатывает), подписчик
-/// `tracing` (`traced`). Число сущностей ограничено `max_entities`, чтобы тот же набор
-/// годился для debug-теста.
+/// Scenarios differ in seed, number of entities (including an empty world and an odd count) and the
+/// load apply tick (before the load is ready, on the first tick, beyond the run). Each
+/// scenario runs on every worker count from `workers` with an instant and a delayed
+/// (`slow_load`) load, and on the largest worker count also with environment variants
+/// that must not affect the hash: `idle_spin` 0 and 128, `PoolStats` snapshots after every
+/// frame, the watchdog disabled and with a 1 ms threshold (it fires in a debug build), and a
+/// `tracing` subscriber (`traced`). The number of entities is capped by `max_entities` so that the
+/// same suite works for a debug test.
 #[must_use]
 pub fn determinism_suite(
     ticks: u64,
@@ -796,19 +796,19 @@ pub fn determinism_suite(
         .collect()
 }
 
-/// Итог проверки сценария.
+/// The outcome of checking a scenario.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// Хеши всех тиков совпали с эталоном.
+    /// The hashes of all ticks matched the reference.
     Match,
-    /// Расхождение на тике `tick` (или разное число тиков — `tick` = длина короче).
+    /// A divergence at tick `tick` (or a different number of ticks: `tick` is the shorter length).
     Diverged {
-        /// Первый тик с другим хешем.
+        /// The first tick with a different hash.
         tick: usize,
     },
 }
 
-/// Сравнивает хеши прогона с эталоном.
+/// Compares a run's hashes with the reference.
 #[must_use]
 pub fn compare(reference: &[u64], hashes: &[u64]) -> Verdict {
     match reference.iter().zip(hashes).position(|(a, b)| a != b) {
@@ -820,7 +820,7 @@ pub fn compare(reference: &[u64], hashes: &[u64]) -> Verdict {
     }
 }
 
-/// Число воркеров без переподписки: логические ядра минус главный поток (минимум 1).
+/// The worker count without oversubscription: logical cores minus the main thread (at least 1).
 #[must_use]
 pub fn default_workers() -> usize {
     PoolConfig::default().workers()

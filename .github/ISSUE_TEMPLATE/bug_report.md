@@ -1,22 +1,22 @@
 ---
 name: Bug report
-about: Ошибка, паника, дедлок или неверный результат
+about: A bug, panic, deadlock or wrong result
 labels: bug
 ---
 
-**Что произошло**
+**What happened**
 
-**Как воспроизвести** (минимальный пример кода)
+**How to reproduce** (a minimal code example)
 
 ```rust
 ```
 
-**Ожидаемое поведение**
+**Expected behavior**
 
-**Окружение**
-- ОС:
+**Environment**
+- OS:
 - `rustc --version`:
-- Версия / коммит pragma.core:
-- Число воркеров (`PoolConfig`):
+- pragma.core version / commit:
+- Number of workers (`PoolConfig`):
 
-**Воспроизводимость** (всегда / иногда — примерно 1 из N запусков)
+**Reproducibility** (always / sometimes, roughly 1 in N runs)

@@ -1,5 +1,5 @@
-# Fuzz-цели pragma.core (cargo-fuzz, nightly). Отдельный workspace: libFuzzer собирается
-# из C++ (`libfuzzer-sys`), поэтому в дерево пользователей и в аудит workspace не входит
+# Fuzz targets of pragma.core (cargo-fuzz, nightly). A separate workspace: libFuzzer is built
+# from C++ (`libfuzzer-sys`), so it is part of neither users' dependency trees nor the workspace audit
 # (DECISIONS.md #20).
 #
 #   cargo +nightly fuzz run graph_build

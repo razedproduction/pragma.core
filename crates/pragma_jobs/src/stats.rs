@@ -5,9 +5,9 @@ use pragma_sync::__private::CachePadded;
 
 use crate::Priority;
 
-/// Счётчики одного потока пула. Каждый набор — на своей кэш-линии, а пишет его один поток
-/// (воркер или владелец внешнего слота), поэтому инкремент — `load` + `store` без RMW
-/// (`Relaxed`: метрики ничего не упорядочивают и на результат задач не влияют).
+/// Counters of one pool thread. Each set sits on its own cache line and is written by one thread
+/// (a worker or the owner of an external slot), so an increment is a `load` + `store` without an RMW
+/// (`Relaxed`: metrics order nothing and do not affect task results).
 #[derive(Default)]
 pub(crate) struct Counters {
     executed: AtomicU64,
@@ -46,7 +46,7 @@ impl Counters {
         add_exclusive(&self.parked_ns, nanos(d));
     }
 
-    /// Для набора, в который пишут несколько потоков (внешние потоки без слота).
+    /// For a set written by several threads (external threads without a slot).
     pub(crate) fn executed_shared(&self) {
         self.executed.fetch_add(1, Ordering::Relaxed);
     }
@@ -67,8 +67,8 @@ impl Counters {
     }
 }
 
-/// Счётчики всех потоков пула: `0..workers` — воркеры, затем внешние слоты, последний —
-/// внешние потоки без слота.
+/// Counters of all pool threads: `0..workers` are the workers, then the external slots, and the last
+/// one is for external threads without a slot.
 pub(crate) type CounterSet = Box<[CachePadded<Counters>]>;
 
 pub(crate) fn counter_set(threads: usize) -> CounterSet {
@@ -77,7 +77,7 @@ pub(crate) fn counter_set(threads: usize) -> CounterSet {
         .collect()
 }
 
-/// Снимок метрик одного потока (или группы внешних потоков), см. [`PoolStats`].
+/// A metrics snapshot of one thread (or a group of external threads), see [`PoolStats`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThreadStats {
     executed: u64,
@@ -89,37 +89,37 @@ pub struct ThreadStats {
 }
 
 impl ThreadStats {
-    /// Сколько задач поток взял на исполнение (свои, из глобальных очередей и украденные).
+    /// How many tasks the thread took for execution (its own, from global queues, and stolen).
     #[must_use]
     pub fn executed(&self) -> u64 {
         self.executed
     }
 
-    /// Сколько задач украдено из локальных очередей других потоков.
+    /// How many tasks were stolen from other threads' local queues.
     #[must_use]
     pub fn stolen(&self) -> u64 {
         self.stolen
     }
 
-    /// Сколько раз воркер засыпал (парковался) без работы.
+    /// How many times the worker fell asleep (parked) without work.
     #[must_use]
     pub fn parks(&self) -> u64 {
         self.parks
     }
 
-    /// Время без работы: поиск (spin) и сон. Только у воркеров.
+    /// Time without work: searching (spin) and sleeping. Workers only.
     #[must_use]
     pub fn idle(&self) -> Duration {
         self.idle
     }
 
-    /// Часть [`idle`](Self::idle), проведённая в парковке.
+    /// The part of [`idle`](Self::idle) spent parked.
     #[must_use]
     pub fn parked(&self) -> Duration {
         self.parked
     }
 
-    /// Задач в локальных очередях потока на момент снимка.
+    /// Tasks in the thread's local queues at the time of the snapshot.
     #[must_use]
     pub fn queued(&self) -> usize {
         self.queued
@@ -137,11 +137,11 @@ impl ThreadStats {
     }
 }
 
-/// Снимок метрик пула ([`ThreadPool::stats`](crate::ThreadPool::stats)).
+/// A pool metrics snapshot ([`ThreadPool::stats`](crate::ThreadPool::stats)).
 ///
-/// Счётчики накопительные с момента создания пула; разность двух снимков — метрики за
-/// интервал. Снимок читает атомики без блокировок и воркеров не останавливает, поэтому
-/// значения разных счётчиков могут относиться к немного разным моментам.
+/// Counters are cumulative since the pool was created; the difference of two snapshots gives the
+/// metrics for the interval. A snapshot reads atomics without locking and does not stop the workers,
+/// so the values of different counters may belong to slightly different moments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolStats {
     workers: Vec<ThreadStats>,
@@ -169,31 +169,31 @@ impl PoolStats {
         }
     }
 
-    /// Метрики воркеров по индексу (`<prefix>-<index>`).
+    /// Worker metrics by index (`<prefix>-<index>`).
     #[must_use]
     pub fn workers(&self) -> &[ThreadStats] {
         &self.workers
     }
 
-    /// Суммарно по потокам вне пула (главный поток в `scope`/`join`/`JobHandle::join`).
+    /// Totals over threads outside the pool (the main thread in `scope`/`join`/`JobHandle::join`).
     #[must_use]
     pub fn external(&self) -> ThreadStats {
         self.external
     }
 
-    /// Всего задач, взятых на исполнение всеми потоками.
+    /// Total tasks taken for execution by all threads.
     #[must_use]
     pub fn executed(&self) -> u64 {
         self.total().executed
     }
 
-    /// Всего краж.
+    /// Total steals.
     #[must_use]
     pub fn stolen(&self) -> u64 {
         self.total().stolen
     }
 
-    /// Задач в глобальной очереди приоритета `priority`.
+    /// Tasks in the global queue of priority `priority`.
     #[must_use]
     pub fn global_queued(&self, priority: Priority) -> usize {
         let index = match priority {
@@ -204,7 +204,7 @@ impl PoolStats {
         self.global.get(index).copied().unwrap_or(0)
     }
 
-    /// Задач во всех очередях (глобальных и локальных) на момент снимка.
+    /// Tasks in all queues (global and local) at the time of the snapshot.
     #[must_use]
     pub fn queued(&self) -> usize {
         self.global

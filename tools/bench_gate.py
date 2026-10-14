@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Бенч-гейт: A/B базовой ревизии и PR на одном раннере (веха M5, docs/perf.md §6).
+"""Bench gate: an A/B of the base revision and the PR on the same runner (milestone M5, docs/perf.md §6).
 
-Обе ревизии собираются заранее, затем замеры идут вперемешку: base → head → base → head …
-(`--rounds` кругов). По каждому замеру берётся лучшее (минимальное) значение медианы
-criterion по кругам: шум общего раннера только замедляет, поэтому минимум — самая
-устойчивая оценка.
+Both revisions are built up front, then measurements are interleaved: base → head → base → head …
+(`--rounds` rounds). For each measurement the best (minimum) criterion median across rounds
+is taken: shared-runner noise only slows things down, so the minimum is the most
+stable estimate.
 
-Регрессия считается так:
-  ratio      = head / base по самому замеру;
-  ref_ratio  = head / base по его эталону (rayon или последовательный код в том же бенче) —
-               на него изменения pragma не влияют, его сдвиг — шум раннера;
+A regression is computed as follows:
+  ratio      = head / base for the measurement itself;
+  ref_ratio  = head / base for its reference (rayon or sequential code in the same bench):
+               pragma changes do not affect it, so its shift is runner noise;
   normalized = ratio / ref_ratio.
-Замер с эталоном падает, если ratio > 1 + threshold И normalized > 1 + threshold.
-Замер без эталона (frame_sim) падает, если ratio > 1 + threshold + noise, где noise — его
-собственный шум: медиана / минимум − 1 по запускам каждой ревизии, наибольший из двух.
+A measurement with a reference fails if ratio > 1 + threshold AND normalized > 1 + threshold.
+A measurement without a reference (frame_sim) fails if ratio > 1 + threshold + noise, where noise is
+its own noise: median / minimum − 1 over the runs of each revision, the larger of the two.
 
-Отдельно (предупреждение, не падение): fib(20) у pragma ≤ 2× rayon на головной ревизии.
+Separately (a warning, not a failure): pragma's fib(20) ≤ 2× rayon on the head revision.
 
-Использование:
-  python3 tools/bench_gate.py --base <worktree base> --head <worktree head>
+Usage:
+  python3 tools/bench_gate.py --base <base worktree> --head <head worktree>
                               [--rounds 3] [--threshold 0.10] [--summary FILE]
-Код выхода 1 при регрессии, 2 при ошибке запуска.
+Exit code 1 on a regression, 2 on a launch error.
 """
 from __future__ import annotations
 
@@ -33,14 +33,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# (пакет, бенч-таргет, фильтр criterion).
+# (package, bench target, criterion filter).
 BENCHES = [
     ("pragma_jobs", "jobs", r"^(join/|spawn/(pragma|rayon)/scope_1000|parallel_for/)"),
     ("pragma_graph", "graph", r"^frame_graph_50/"),
 ]
 CRITERION_ARGS = ["--warm-up-time", "1", "--measurement-time", "3", "--noplot"]
 
-# Замер → эталон, на который изменения pragma не влияют.
+# Measurement → reference that pragma changes do not affect.
 REFERENCES = {
     "join/pragma_fib20": "join/rayon_fib20",
     "join/pragma_single": "join/rayon_single",
@@ -80,7 +80,7 @@ def run(cmd: list[str], side: Side) -> str:
 
 
 def criterion_results(side: Side) -> dict[str, float]:
-    """Медианы (нс) последнего прогона: target/criterion/<id>/new/estimates.json."""
+    """Medians (ns) of the last run: target/criterion/<id>/new/estimates.json."""
     base = side.target / "criterion"
     results = {}
     for path in base.glob("**/new/estimates.json"):
@@ -95,7 +95,7 @@ SCALE_MS = {"ns": 1e-6, "µs": 1e-3, "us": 1e-3, "ms": 1.0, "s": 1e3}
 
 
 def frame_sim_ms_per_tick(output: str) -> float:
-    """Мс/тик из строки отчёта; понимает и вывод без колонки `ms/tick` (старые ревизии)."""
+    """Ms/tick from the report line; also understands output without the `ms/tick` column (old revisions)."""
     match = DURATION.search(output)
     if not match:
         sys.stderr.write(output)
@@ -116,7 +116,7 @@ def build(side: Side) -> None:
 
 
 def measure(side: Side, samples: dict[str, list[float]]) -> dict[str, float]:
-    """Замеры одного круга; все запуски frame_sim дописываются в `samples` (для оценки шума)."""
+    """The measurements of one round; every frame_sim run is appended to `samples` (for the noise estimate)."""
     results: dict[str, float] = {}
     for package, bench, pattern in BENCHES:
         run(
@@ -127,8 +127,8 @@ def measure(side: Side, samples: dict[str, list[float]]) -> dict[str, float]:
     exe = side.target / "release" / ("frame_sim.exe" if os.name == "nt" else "frame_sim")
     for workers in frame_sim_workers():
         key = f"frame_sim/workers_{workers}"
-        # Несколько запусков подряд, лучший: время включает создание пула и шумит сильнее
-        # criterion. Нс, как у criterion, чтобы таблица была однородной.
+        # Several runs in a row, the best one wins: the time includes pool creation and is noisier
+        # than criterion. In ns, like criterion, so the table is uniform.
         runs = [
             frame_sim_ms_per_tick(
                 run([str(exe), "--ticks", str(FRAME_SIM_TICKS), "--workers", str(workers)], side)
@@ -142,7 +142,7 @@ def measure(side: Side, samples: dict[str, list[float]]) -> dict[str, float]:
 
 
 def spread(values: list[float]) -> float:
-    """Шум ревизии по её же запускам: медиана / минимум − 1 (выброс один не раздувает)."""
+    """A revision's noise from its own runs: median / minimum − 1 (a single outlier does not inflate it)."""
     ordered = sorted(values)
     return ordered[len(ordered) // 2] / ordered[0] - 1.0
 
@@ -164,7 +164,7 @@ def fmt_ns(ns: float) -> str:
 
 
 def main() -> int:
-    # Консоль раннера Windows — cp1252: кириллица отчёта иначе роняет скрипт.
+    # The Windows runner console is cp1252: non-Latin-1 report characters (≤, →) would crash the script.
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
@@ -194,8 +194,8 @@ def main() -> int:
         ref: head[ref] / base[ref] for ref in set(REFERENCES.values()) if ref in base and ref in head
     }
     noise = max((abs(r - 1.0) for r in ref_ratios.values()), default=0.0)
-    # Шум замера без эталона — по его собственным запускам на каждой ревизии, а не по эталонам
-    # criterion: наносекундный `rayon_single` шумит на 20–35% и раздувал бы порог frame_sim.
+    # The noise of a measurement without a reference comes from its own runs on each revision, not from
+    # the criterion references: the nanosecond `rayon_single` is 20–35% noisy and would inflate the frame_sim limit.
     own_noise = {
         key: max(spread(samples["base"][key]), spread(samples["head"][key]))
         for key in samples["head"]
@@ -216,8 +216,8 @@ def main() -> int:
             normalized = ratio
             key_noise = own_noise.get(key, noise)
             failed = ratio > limit + key_noise
-            note = f"порог {limit + key_noise:.3f} (шум запусков {key_noise:.3f})"
-        verdict = "РЕГРЕССИЯ" if failed else "ok"
+            note = f"limit {limit + key_noise:.3f} (run noise {key_noise:.3f})"
+        verdict = "REGRESSION" if failed else "ok"
         if failed:
             failures.append(key)
         rows.append(
@@ -226,21 +226,21 @@ def main() -> int:
         )
 
     lines = [
-        f"### Бенч-гейт ({os.cpu_count()} ядер, {args.rounds} кругов A/B, порог +{args.threshold:.0%})",
+        f"### Bench gate ({os.cpu_count()} cores, {args.rounds} A/B rounds, threshold +{args.threshold:.0%})",
         "",
-        "| Замер | base | head | head/base | эталон head/base | нормировано | итог |",
+        "| Measurement | base | head | head/base | reference head/base | normalized | verdict |",
         "|---|---|---|---|---|---|---|",
         *rows,
         "",
-        f"Шум раннера (наибольший сдвиг эталонов): {noise:.1%}.",
+        f"Runner noise (largest reference shift): {noise:.1%}.",
     ]
     fib_ok = True
     if FIB[0] in head and FIB[1] in head:
         fib_ratio = head[FIB[0]] / head[FIB[1]]
         fib_ok = fib_ratio <= FIB_LIMIT
         lines.append(
-            f"fib(20): pragma / rayon = {fib_ratio:.2f}× (цель ≤ {FIB_LIMIT:.0f}×, "
-            f"запас {FIB_LIMIT / fib_ratio - 1:+.0%})."
+            f"fib(20): pragma / rayon = {fib_ratio:.2f}× (target ≤ {FIB_LIMIT:.0f}×, "
+            f"headroom {FIB_LIMIT / fib_ratio - 1:+.0%})."
         )
     report = "\n".join(lines)
     print(report)
@@ -248,9 +248,9 @@ def main() -> int:
         with args.summary.open("a", encoding="utf-8") as fh:
             fh.write(report + "\n")
     if not fib_ok:
-        print(f"::warning::fib(20) pragma/rayon выше {FIB_LIMIT}× на этом раннере")
+        print(f"::warning::fib(20) pragma/rayon is above {FIB_LIMIT}× on this runner")
     if failures:
-        print(f"::error::регрессия > {args.threshold:.0%}: {', '.join(failures)}")
+        print(f"::error::regression > {args.threshold:.0%}: {', '.join(failures)}")
         return 1
     return 0
 

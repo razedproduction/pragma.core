@@ -1,8 +1,8 @@
-//! Оракул графа для property-тестов (`tests/prop.rs`) и fuzz (`fuzz/fuzz_targets/graph_build.rs`):
-//! произвольное описание → либо ожидаемая ошибка, либо порядок и рёбра, совпадающие с
-//! независимой (наивной) реализацией. При исполнении проверяет, что рёбра соблюдаются, каждая
-//! задача выполняется ровно один раз, а взятие объявленных ресурсов никогда не конфликтует.
-// Тестовый код: паника = провал проверки, размеры входа малы.
+//! The graph oracle for property tests (`tests/prop.rs`) and fuzzing (`fuzz/fuzz_targets/graph_build.rs`):
+//! an arbitrary description → either the expected error, or an order and edges matching an
+//! independent (naive) implementation. When executing, it checks that edges are respected, every
+//! task runs exactly once, and borrowing declared resources never conflicts.
+// Test code: a panic is a failed check; input sizes are small.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -18,28 +18,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pragma_graph::{FrameGraph, GraphError, Res, ResMut, Resources, TaskConfig, TaskContext};
 use pragma_jobs::ThreadPool;
 
-/// Число типов ресурсов в описаниях.
+/// Number of resource types in descriptions.
 pub const RESOURCES: usize = 4;
-/// Максимум задач в описании.
+/// Maximum number of tasks in a description.
 pub const MAX_TASKS: usize = 12;
 
-/// Ресурс номер `N`: счётчик записей.
+/// Resource number `N`: a write counter.
 #[derive(Debug)]
 pub struct R<const N: usize>(pub u64);
 
-/// Описание задачи.
+/// A task description.
 #[derive(Debug, Clone)]
 pub struct TaskSpec {
     pub name: String,
-    /// Биты `0..RESOURCES`: читаемые ресурсы.
+    /// Bits `0..RESOURCES`: resources read.
     pub reads: u8,
-    /// Биты `0..RESOURCES`: записываемые ресурсы (запись важнее чтения).
+    /// Bits `0..RESOURCES`: resources written (writing takes precedence over reading).
     pub writes: u8,
-    /// `(true, x)` — `before(x)`, `(false, x)` — `after(x)`, в порядке объявления.
+    /// `(true, x)` is `before(x)`, `(false, x)` is `after(x)`, in declaration order.
     pub deps: Vec<(bool, String)>,
 }
 
-/// Описание графа.
+/// A graph description.
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub ordered: bool,
@@ -47,8 +47,8 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// Декодирует описание из произвольных байтов (недостающие байты — нули). Дубли имён и
-    /// неизвестные зависимости редки, чтобы большинство входов доходило до проверки порядка.
+    /// Decodes a description from arbitrary bytes (missing bytes are zeros). Duplicate names and
+    /// unknown dependencies are rare, so that most inputs get as far as the order checks.
     pub fn from_bytes(data: &[u8]) -> Self {
         let mut it = data.iter().copied();
         let mut next = move || it.next().unwrap_or(0);
@@ -125,7 +125,7 @@ fn declare(mut t: TaskConfig, task: &TaskSpec) -> TaskConfig {
     t
 }
 
-/// Взятый ресурс (держим все на время «работы», чтобы конфликты успели проявиться).
+/// A borrowed resource (all of them are held for the duration of the "work" so conflicts can show up).
 enum Guard<'a> {
     R0(Res<'a, R<0>>),
     R1(Res<'a, R<1>>),
@@ -160,7 +160,7 @@ fn bump(guard: &mut Guard<'_>) {
     }
 }
 
-/// Отметки исполнения задачи: момент начала и конца по общим «часам».
+/// Task execution marks: start and end moments on a shared "clock".
 #[derive(Default)]
 struct Trace {
     clock: AtomicUsize,
@@ -169,14 +169,14 @@ struct Trace {
     runs: Vec<AtomicUsize>,
 }
 
-/// Ожидаемый исход сборки.
+/// The expected build outcome.
 enum Expected {
     Duplicate(String),
     Unknown {
         task: String,
         missing: String,
     },
-    /// Цикл; рёбра, по которым он должен проходить.
+    /// A cycle; the edges it must go through.
     Cycle(Vec<Vec<bool>>),
     Ambiguous {
         a: String,
@@ -209,7 +209,7 @@ fn has_cycle(n: usize, reach: &[Vec<bool>]) -> bool {
     (0..n).any(|i| reach[i][i])
 }
 
-/// Kahn с минимальным готовым индексом — квадратичная эталонная версия.
+/// Kahn with the lowest ready index: a quadratic reference version.
 fn stable_order(n: usize, edges: &[Vec<bool>]) -> Vec<usize> {
     let mut done = vec![false; n];
     let mut order = Vec::with_capacity(n);
@@ -285,10 +285,10 @@ fn expected(spec: &Spec) -> Expected {
     }
 }
 
-/// Большой граф (M5): `selector` выбирает форму, исход предсказуем без квадратичного оракула.
-/// - больше [`pragma_graph::MAX_TASKS`] задач → `TooLarge` до любой квадратичной работы;
-/// - ровно на пределе или чуть ниже, без рёбер → граф строится в порядке регистрации;
-/// - режим `ordered`, все пишут один ресурс, пар больше [`pragma_graph::MAX_EDGES`] → `TooLarge`.
+/// A large graph (M5): `selector` picks the shape, and the outcome is predictable without the quadratic oracle.
+/// - more than [`pragma_graph::MAX_TASKS`] tasks → `TooLarge` before any quadratic work;
+/// - exactly at the limit or slightly below, no edges → the graph builds in registration order;
+/// - `ordered` mode, everyone writes one resource, more pairs than [`pragma_graph::MAX_EDGES`] → `TooLarge`.
 pub fn check_large(selector: u8) {
     let extra = usize::from(selector);
     let (n, ordered) = match selector % 3 {
@@ -318,7 +318,7 @@ pub fn check_large(selector: u8) {
     }
 }
 
-/// Строит граф по описанию и сверяет с оракулом. С `pool` — ещё и исполняет `frames` кадров.
+/// Builds the graph from a description and checks it against the oracle. With `pool`, it also runs `frames` frames.
 pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
     let n = spec.tasks.len();
     let trace = Arc::new(Trace {
@@ -398,11 +398,11 @@ pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
         (_, other) => panic!("oracle and builder disagree for {spec:?}: got {other:?}"),
     };
 
-    // Стабильный порядок совпадает с эталоном.
+    // The stable order matches the reference.
     let actual: Vec<usize> = graph.order().map(index).collect();
     assert_eq!(actual, order, "order for {spec:?}");
 
-    // Рёбра графа (после редукции) дают ту же достижимость, что и эталонные.
+    // The graph's edges (after reduction) give the same reachability as the reference ones.
     let mut edges = vec![vec![false; n]; n];
     for (from, to) in graph.edges() {
         edges[index(from)][index(to)] = true;
@@ -438,7 +438,7 @@ pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
             );
         }
     }
-    // Каждая пишущая задача увеличила свой ресурс раз за кадр.
+    // Every writing task incremented its resource once per frame.
     let writers = |k: usize| spec.tasks.iter().filter(|t| bit(t.writes, k)).count() as u64;
     let frames = frames as u64;
     assert_eq!(res.get::<R<0>>().unwrap().0, writers(0) * frames);

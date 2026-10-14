@@ -1,10 +1,10 @@
-//! Экспорт графа для отладки: Graphviz DOT и Mermaid.
+//! Graph export for debugging: Graphviz DOT and Mermaid.
 
 use std::fmt::Write as _;
 
 use crate::graph::{FrameGraph, Node};
 
-/// Имя типа без путей модулей: `game::physics::Bodies` → `Bodies`,
+/// A type name without module paths: `game::physics::Bodies` → `Bodies`,
 /// `Vec<game::Item>` → `Vec<Item>`.
 fn short_type_name(full: &str) -> String {
     fn flush(token: &mut String, out: &mut String) {
@@ -25,7 +25,7 @@ fn short_type_name(full: &str) -> String {
     out
 }
 
-/// Строки подписи задачи: имя, читаемые и записываемые ресурсы.
+/// The lines of a task's label: the name, the resources read and written.
 fn label_lines(node: &Node) -> Vec<String> {
     let list = |write: bool| {
         node.access
@@ -58,8 +58,8 @@ fn mermaid_escape(s: &str) -> String {
 }
 
 impl FrameGraph {
-    /// Граф в формате Graphviz DOT (`dot -Tsvg graph.dot`): задачи с объявленным доступом
-    /// и рёбра после транзитивной редукции.
+    /// The graph in Graphviz DOT format (`dot -Tsvg graph.dot`): tasks with their declared access
+    /// and the edges after transitive reduction.
     #[must_use]
     pub fn to_dot(&self) -> String {
         let mut out = String::from("digraph frame {\n    rankdir=LR;\n    node [shape=box];\n");
@@ -80,7 +80,7 @@ impl FrameGraph {
         out
     }
 
-    /// Граф в формате Mermaid (`flowchart LR`), например для вставки в Markdown.
+    /// The graph in Mermaid format (`flowchart LR`), for example to embed in Markdown.
     #[must_use]
     pub fn to_mermaid(&self) -> String {
         let mut out = String::from("flowchart LR\n");

@@ -1,21 +1,21 @@
-/// Приоритет задачи (`docs/architecture.md` §3.2). Порядок `Ord`: `Frame` — самый срочный.
+/// Task priority (`docs/architecture.md` §3.2). `Ord` order: `Frame` is the most urgent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[non_exhaustive]
 pub enum Priority {
-    /// Работа текущего кадра (граф, `parallel_for`): берётся первой.
+    /// Work of the current frame (graph, `parallel_for`): taken first.
     Frame,
-    /// Задачи без дедлайна кадра: после всех `Frame`.
+    /// Tasks without a frame deadline: after all `Frame` tasks.
     #[default]
     Normal,
-    /// Запекание, декомпрессия, стриминг: отдельная глобальная очередь и лимит
-    /// одновременно занятых воркеров ([`PoolConfig::with_background_limit`]).
+    /// Baking, decompression, streaming: a separate global queue and a limit on
+    /// simultaneously busy workers ([`PoolConfig::with_background_limit`]).
     ///
     /// [`PoolConfig::with_background_limit`]: crate::PoolConfig::with_background_limit
     Background,
 }
 
 impl Priority {
-    /// Имя приоритета для логов и метрик: `"frame"`, `"normal"`, `"background"`.
+    /// The priority name for logs and metrics: `"frame"`, `"normal"`, `"background"`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -26,27 +26,27 @@ impl Priority {
     }
 }
 
-/// Способ разбиения данных на задачи в `parallel_*`.
+/// How data is split into tasks in `parallel_*`.
 ///
-/// Разбиение зависит **только** от длины данных и `Grain`, но не от числа воркеров, поэтому
-/// `parallel_reduce` даёт побитово одинаковый результат на любом пуле (`architecture.md` §6).
+/// The split depends **only** on the data length and `Grain`, not on the number of workers, so
+/// `parallel_reduce` gives a bit-identical result on any pool (`architecture.md` §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Grain {
-    /// Около [`Grain::AUTO_CHUNKS`] чанков, но не меньше [`Grain::AUTO_MIN_CHUNK`] элементов в чанке.
+    /// About [`Grain::AUTO_CHUNKS`] chunks, but no fewer than [`Grain::AUTO_MIN_CHUNK`] elements per chunk.
     #[default]
     Auto,
-    /// Фиксированный размер чанка в элементах (`0` трактуется как `1`).
+    /// A fixed chunk size in elements (`0` is treated as `1`).
     Fixed(usize),
 }
 
 impl Grain {
-    /// Целевое число чанков для [`Grain::Auto`].
+    /// Target number of chunks for [`Grain::Auto`].
     pub const AUTO_CHUNKS: usize = 128;
-    /// Минимальный размер чанка для [`Grain::Auto`]: мельче — накладные расходы дороже работы.
+    /// Minimum chunk size for [`Grain::Auto`]: below it the overhead costs more than the work.
     pub const AUTO_MIN_CHUNK: usize = 64;
 
-    /// Размер чанка для `len` элементов (всегда `>= 1`).
+    /// The chunk size for `len` elements (always `>= 1`).
     #[must_use]
     pub fn chunk_size(self, len: usize) -> usize {
         match self {

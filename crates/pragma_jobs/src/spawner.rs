@@ -5,11 +5,11 @@ use crate::{JobError, Priority, ThreadPool};
 
 const DETACHED_JOB: &str = "spawn_detached";
 
-/// Лёгкая ссылка на пул для задач без хэндла: основа исполнителей поверх пула
-/// (`pragma_async` планирует через неё `Runnable` своих future).
+/// A lightweight reference to the pool for tasks without a handle: the basis of executors on top of
+/// the pool (`pragma_async` schedules the `Runnable`s of its futures through it).
 ///
-/// Клонируется дёшево и **не держит пул живым**: после начала остановки пула
-/// ([`ThreadPool`] сброшен) задачи не принимаются и сбрасываются без выполнения.
+/// Cheap to clone and **does not keep the pool alive**: once the pool begins shutting down
+/// ([`ThreadPool`] is dropped), tasks are not accepted and are dropped without running.
 ///
 /// ```
 /// use std::sync::mpsc;
@@ -39,15 +39,15 @@ impl std::fmt::Debug for Spawner {
 }
 
 impl Spawner {
-    /// Ставит `'static`-задачу в очередь приоритета `priority` без хэндла на результат.
+    /// Queues a `'static` task with priority `priority`, without a handle to the result.
     ///
-    /// Паника задачи перехватывается воркером и пишется в лог, воркер продолжает работу;
-    /// если результат или паника важны вызывающему, задача сообщает их сама.
+    /// A panic of the task is caught by the worker and logged, and the worker keeps running;
+    /// if the result or the panic matters to the caller, the task reports them itself.
     ///
-    /// Если пул уже останавливается или остановлен, задача сбрасывается **без выполнения**
-    /// (её деструктор вызывается сразу) и возвращается [`JobError::Cancelled`]. Задача,
-    /// принятая в гонке с остановкой, тоже может быть сброшена без выполнения — так же, как
-    /// задачи очередей при [`ShutdownPolicy::Cancel`](crate::ShutdownPolicy::Cancel).
+    /// If the pool is already shutting down or has stopped, the task is dropped **without running**
+    /// (its destructor runs immediately) and [`JobError::Cancelled`] is returned. A task
+    /// accepted in a race with shutdown may also be dropped without running, just like
+    /// queued tasks under [`ShutdownPolicy::Cancel`](crate::ShutdownPolicy::Cancel).
     pub fn spawn_detached<F>(&self, priority: Priority, f: F) -> Result<(), JobError>
     where
         F: FnOnce() + Send + 'static,
@@ -66,15 +66,15 @@ impl Spawner {
         }
     }
 
-    /// Пул ещё принимает задачи (не начал остановку).
+    /// Whether the pool still accepts tasks (has not begun shutting down).
     #[must_use]
     pub fn is_alive(&self) -> bool {
         self.shared.upgrade().is_some_and(|s| !s.is_shutdown())
     }
 
-    /// Текущий поток исполняет работу этого пула: это его воркер или внешний поток внутри
-    /// `scope`/`join`/[`JobHandle::join`](crate::JobHandle::join) (например, главный поток
-    /// во время кадра графа). Блокирующее ожидание здесь задержало бы кадр или повесило пул.
+    /// Whether the current thread is doing this pool's work: it is one of its workers or an external
+    /// thread inside `scope`/`join`/[`JobHandle::join`](crate::JobHandle::join) (for example the main
+    /// thread during a graph frame). A blocking wait here would delay the frame or hang the pool.
     #[must_use]
     pub fn in_pool_context(&self) -> bool {
         self.shared.upgrade().is_some_and(|s| s.in_context())
@@ -82,7 +82,7 @@ impl Spawner {
 }
 
 impl ThreadPool {
-    /// Лёгкая ссылка на пул для задач без хэндла (см. [`Spawner`]).
+    /// A lightweight reference to the pool for tasks without a handle (see [`Spawner`]).
     #[must_use]
     pub fn spawner(&self) -> Spawner {
         Spawner {

@@ -6,20 +6,20 @@ use crossbeam_utils::Backoff;
 use crate::SyncError;
 use crate::primitives::{AtomicUsize, Condvar, Mutex, Ordering};
 
-/// Как часто ожидающий в [`AtomicCounter::wait_while_helping`] перепроверяет, не появилась ли
-/// работа, пока он спит на счётчике.
+/// How often a waiter in [`AtomicCounter::wait_while_helping`] rechecks whether work has appeared
+/// while it sleeps on the counter.
 const HELP_RECHECK: Duration = Duration::from_micros(500);
 
-/// Счётчик незавершённых задач, на котором можно ждать нуля.
+/// A counter of unfinished tasks that can be waited on until it reaches zero.
 ///
-/// Вместо хэндла на каждую задачу: группа задач увеличивает счётчик при создании и уменьшает
-/// при завершении, ожидающий ждёт одного события «счётчик стал нулём».
+/// Instead of a handle per task: a group of tasks increments the counter on creation and decrements
+/// it on completion, and the waiter waits for a single "counter reached zero" event.
 ///
-/// Протокол пробуждения: ожидающий регистрируется в `waiters` (RMW) под мьютексом и
-/// перепроверяет счётчик; уменьшающий после перехода в ноль читает `waiters` тоже через RMW и
-/// только при ненулевом значении берёт мьютекс. RMW по `waiters` упорядочены, поэтому хотя бы
-/// одна сторона видит действие другой (loom-модель в `tests/loom.rs`). Без ожидающих переход
-/// в ноль не трогает мьютекс.
+/// Wakeup protocol: the waiter registers itself in `waiters` (an RMW) under the mutex and
+/// rechecks the counter; after reaching zero, the decrementer also reads `waiters` via an RMW and
+/// takes the mutex only if it is non-zero. RMWs on `waiters` are totally ordered, so at least
+/// one side sees the other's action (loom model in `tests/loom.rs`). Without waiters, reaching
+/// zero does not touch the mutex.
 #[derive(Debug)]
 pub struct AtomicCounter {
     count: AtomicUsize,
@@ -35,7 +35,7 @@ impl Default for AtomicCounter {
 }
 
 impl AtomicCounter {
-    /// Счётчик с начальным значением `count`.
+    /// A counter with the initial value `count`.
     #[must_use]
     pub fn new(count: usize) -> Self {
         Self {
@@ -46,22 +46,22 @@ impl AtomicCounter {
         }
     }
 
-    /// Текущее значение.
+    /// The current value.
     #[must_use]
     pub fn get(&self) -> usize {
         self.count.load(Ordering::Acquire)
     }
 
-    /// Счётчик равен нулю (все задачи завершены).
+    /// Whether the counter is zero (all tasks have finished).
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.get() == 0
     }
 
-    /// Увеличивает счётчик на единицу; ошибка вместо заворачивания на `usize::MAX`.
+    /// Increments the counter by one; an error instead of wrapping at `usize::MAX`.
     pub fn increment(&self) -> Result<(), SyncError> {
         let mut current = self.count.load(Ordering::Relaxed);
-        // CAS-цикл вместо `fetch_update`: тот устарел в 1.99, а `try_update` нет в MSRV.
+        // A CAS loop instead of `fetch_update`: that one is deprecated in 1.99, and `try_update` is not in the MSRV.
         loop {
             let next = current.checked_add(1).ok_or(SyncError::CounterOverflow)?;
             match self.count.compare_exchange_weak(
@@ -76,8 +76,8 @@ impl AtomicCounter {
         }
     }
 
-    /// Уменьшает счётчик; возвращает `true`, если он стал нулём (тогда будит ожидающих).
-    /// На нулевом счётчике ничего не делает и возвращает `false`.
+    /// Decrements the counter; returns `true` if it reached zero (and then wakes the waiters).
+    /// On a zero counter does nothing and returns `false`.
     pub fn decrement(&self) -> bool {
         let mut current = self.count.load(Ordering::Acquire);
         let reached_zero = loop {
@@ -94,33 +94,33 @@ impl AtomicCounter {
                 Err(actual) => current = actual,
             }
         };
-        // RMW, а не load: чтение через `fetch_add(0)` всегда видит последнее значение в порядке
-        // модификаций `waiters`, и протокол остаётся верным даже без глобального порядка SeqCst
-        // (loom моделирует SeqCst как AcqRel и ловит потерянное пробуждение у варианта с load).
+        // An RMW, not a load: reading via `fetch_add(0)` always sees the latest value in the
+        // modification order of `waiters`, so the protocol stays correct even without the global
+        // SeqCst order (loom models SeqCst as AcqRel and catches a lost wakeup in the load variant).
         if reached_zero && self.waiters.fetch_add(0, Ordering::SeqCst) > 0 {
-            // Ожидающий держит мьютекс от проверки счётчика до засыпания в `wait`,
-            // поэтому notify под мьютексом не может проскочить мимо него.
+            // The waiter holds the mutex from checking the counter until falling asleep in `wait`,
+            // so a notify under the mutex cannot slip past it.
             let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
             self.cvar.notify_all();
         }
         reached_zero
     }
 
-    /// Блокирует поток, пока счётчик не станет нулём.
+    /// Blocks the thread until the counter reaches zero.
     pub fn wait(&self) {
         self.wait_inner(None);
     }
 
-    /// Ждёт нуля не дольше `timeout`; возвращает `true`, если счётчик уже ноль.
+    /// Waits for zero no longer than `timeout`; returns `true` if the counter is zero by then.
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
         self.wait_inner(Some(timeout))
     }
 
-    /// Ждёт нуля, а пока ждёт — вызывает `help` (help-while-wait).
+    /// Waits for zero, calling `help` in the meantime (help-while-wait).
     ///
-    /// `help` должен выполнить одну единицу чужой работы и вернуть `true`, или вернуть `false`,
-    /// если работы нет. Без работы поток сначала крутится с [`Backoff`], потом спит на счётчике
-    /// короткими интервалами, между которыми снова спрашивает `help`.
+    /// `help` must run one unit of someone else's work and return `true`, or return `false`
+    /// if there is no work. Without work, the thread first spins with [`Backoff`], then sleeps on the
+    /// counter in short intervals, asking `help` again between them.
     pub fn wait_while_helping(&self, mut help: impl FnMut() -> bool) {
         let backoff = Backoff::new();
         while !self.is_zero() {

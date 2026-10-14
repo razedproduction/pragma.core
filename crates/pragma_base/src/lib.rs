@@ -1,7 +1,7 @@
-//! L0-фундамент `pragma.core`: типизированные ошибки, generational-хэндлы и
-//! тики симуляции.
+//! The L0 foundation of `pragma.core`: typed errors, generational handles and
+//! simulation ticks.
 //!
-//! Крейт не знает о потоках и не имеет `unsafe` — все верхние слои строятся на нём.
+//! The crate knows nothing about threads and contains no `unsafe`; every upper layer builds on it.
 //!
 //! ```
 //! use pragma_base::{HandlePool, Tick};
@@ -10,7 +10,7 @@
 //! let h = pool.insert("job-name")?;
 //! assert_eq!(pool.get(h), Some(&"job-name"));
 //! pool.remove(h)?;
-//! assert_eq!(pool.get(h), None); // устаревший хэндл безопасно возвращает None
+//! assert_eq!(pool.get(h), None); // a stale handle safely yields None
 //!
 //! let t = Tick::ZERO.next()?;
 //! assert_eq!(t.get(), 1);

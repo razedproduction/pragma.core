@@ -1,42 +1,42 @@
-/// Ошибки платформенного слоя.
+/// Errors of the platform layer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SysError {
-    /// Системный вызов `op` вернул ошибку ОС `code` (`GetLastError` / `errno`).
+    /// The system call `op` returned OS error `code` (`GetLastError` / `errno`).
     #[error("{op} failed: OS error {code}")]
     #[non_exhaustive]
     Os {
-        /// Какой вызов.
+        /// Which call.
         op: &'static str,
-        /// Код ошибки ОС.
+        /// OS error code.
         code: i32,
     },
-    /// ОС отказала в правах (например, повышение приоритета на Linux без `CAP_SYS_NICE`).
+    /// The OS denied permission (for example raising the priority on Linux without `CAP_SYS_NICE`).
     #[error("{op}: permission denied (OS error {code})")]
     #[non_exhaustive]
     PermissionDenied {
-        /// Какой вызов.
+        /// Which call.
         op: &'static str,
-        /// Код ошибки ОС.
+        /// OS error code.
         code: i32,
     },
-    /// Номер ядра вне поддерживаемого диапазона `0..limit`.
+    /// The core number is outside the supported range `0..limit`.
     #[error("core {core} is out of range 0..{limit}")]
     #[non_exhaustive]
     InvalidCore {
-        /// Запрошенное ядро.
+        /// The requested core.
         core: usize,
-        /// Верхняя граница (не включительно).
+        /// Upper bound (exclusive).
         limit: usize,
     },
-    /// Имя потока содержит NUL.
+    /// The thread name contains a NUL.
     #[error("thread name contains a NUL byte")]
     InvalidName,
-    /// Операция не поддерживается на этой платформе.
+    /// The operation is not supported on this platform.
     #[error("{op} is not supported on this platform")]
     #[non_exhaustive]
     Unsupported {
-        /// Какая операция.
+        /// Which operation.
         op: &'static str,
     },
 }

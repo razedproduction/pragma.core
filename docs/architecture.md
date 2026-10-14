@@ -1,100 +1,100 @@
-# Архитектура pragma.core
+# pragma.core architecture
 
-## 1. Назначение и границы
+## 1. Purpose and boundaries
 
-pragma.core — слой **под** движком. Он владеет потоками, планирует работу кадра и
-выполняет фоновый I/O. ECS, рендер, физика и аудио строятся поверх и не заводят свои пулы.
+pragma.core is the layer **under** an engine. It owns the threads, schedules the work of a frame and
+runs background I/O. ECS, rendering, physics and audio are built on top and do not start their own pools.
 
-**Входит:** пул рабочих потоков с work-stealing, задачи (`spawn`/`join`/`scope`/`parallel_for`),
-граф задач кадра с объявленным доступом к ресурсам, async-задачи для I/O, базовые примитивы
-(ошибки, generational-хэндлы, тики, синхронизация).
+**In scope:** a work-stealing pool of worker threads, tasks (`spawn`/`join`/`scope`/`parallel_for`),
+a frame graph with declared resource access, async tasks for I/O, base primitives
+(errors, generational handles, ticks, synchronization).
 
-**Сознательно не входит** (DECISIONS #1): ECS, рендер, окно и ввод, App/плагины/игровой цикл,
-сеть, файберы/корутины на своих стеках, wasm/мобильные платформы.
+**Deliberately out of scope** (DECISIONS #1): ECS, rendering, windowing and input, App/plugins/the game loop,
+networking, fibers/coroutines on their own stacks, wasm/mobile platforms.
 
-## 2. Слои
+## 2. Layers
 
-Крейт зависит только от крейтов **строго нижнего** слоя. Правила — в [`layers.toml`](../layers.toml),
-проверка — `python tools/audit_workspace.py .`.
-
-```
-L5  frame_sim       пример-вертикальный срез (examples/, не публикуется), только через фасад
-L4  pragma_core     фасад: re-export, prelude, feature-флаги (jobs, graph, async)
-L3  pragma_graph    граф кадра            pragma_async   async-задачи
-L2  pragma_jobs     пул, work-stealing, join/scope/parallel_for
-L1  pragma_sync     латчи, парковка, backoff, метки задач     ← unsafe (под Miri + loom)
-    pragma_sys      имена/приоритеты потоков, affinity        ← unsafe только FFI (DECISIONS #27)
-L0  pragma_base     ошибки, Handle/HandlePool, Tick
-```
-
-Внешние зависимости: только pure Rust ([`deny.toml`](../deny.toml)). Все версии лежат в
-`[workspace.dependencies]` корневого `Cargo.toml`.
-
-## 3. Модель исполнения
-
-### 3.1 Пул (`pragma_jobs`, M1)
+A crate depends only on crates of a **strictly lower** layer. The rules are in [`layers.toml`](../layers.toml),
+checked by `python tools/audit_workspace.py .`.
 
 ```
-          ┌──────────── Injector (глобальная очередь, внешние spawn) ────────────┐
+L5  frame_sim       vertical-slice example (examples/, not published), through the facade only
+L4  pragma_core     facade: re-exports, prelude, feature flags (jobs, graph, async)
+L3  pragma_graph    frame graph            pragma_async   async tasks
+L2  pragma_jobs     pool, work-stealing, join/scope/parallel_for
+L1  pragma_sync     latches, parking, backoff, task labels   ← unsafe (under Miri + loom)
+    pragma_sys      thread names/priorities, affinity        ← unsafe for FFI only (DECISIONS #27)
+L0  pragma_base     errors, Handle/HandlePool, Tick
+```
+
+External dependencies: pure Rust only ([`deny.toml`](../deny.toml)). All versions live in
+`[workspace.dependencies]` of the root `Cargo.toml`.
+
+## 3. Execution model
+
+### 3.1 The pool (`pragma_jobs`, M1)
+
+```
+          ┌───────────── Injector (global queue, external spawns) ─────────────┐
           ▼                         ▼                           ▼
    ┌─ Worker 0 ─┐            ┌─ Worker 1 ─┐              ┌─ Worker N ─┐
    │ LIFO deque │◄── steal ──│ LIFO deque │◄──── steal ──│ LIFO deque │
    └────────────┘            └────────────┘              └────────────┘
-   главный поток тоже исполняет задачи, пока ждёт (help-while-wait)
+   the main thread also runs tasks while it waits (help-while-wait)
 ```
 
-- Число воркеров по умолчанию — `логические ядра − 1`: главный поток участвует в работе.
-- Локальная очередь — `crossbeam_deque::Worker` (LIFO для кэш-локальности), кража — FIFO
-  с хвоста чужой очереди. Внешние задачи идут через `Injector`.
-- Порядок поиска работы: своя очередь → injector → случайная жертва для кражи → короткий spin
-  с `Backoff` → парковка. Пробуждение адресное: будим один спящий воркер на каждую новую задачу,
-  а не всех сразу.
-- **Ожидание никогда не блокирует воркер вхолостую.** `join`/`scope`/`JobHandle::join`
-  исполняют чужие задачи, пока ждут свою (help-while-wait). Это исключает дедлок вложенных
-  `join` при любом числе потоков, включая один.
-- **Главный поток — временный участник пула.** На время `scope`/`join`/`JobHandle::join`
-  поток вне пула занимает один из 4 внешних слотов — собственную LIFO-очередь, видимую ворам
-  (DECISIONS #16). Иначе его подзадачи шли бы в FIFO-injector, и помощь в ожидании брала бы
-  самые старые задачи, наращивая стек. Слоты заняты — работаем через injector. Контекст слота
-  кэшируется в потоке (очереди возвращаются в слот, на их место встаёт заглушка), поэтому вход
-  в пул раз в кадр не аллоцирует (DECISIONS #18).
-- Сон и пробуждение: воркер, не нашедший работы, сначала крутится с `Backoff`, затем ещё
-  `idle_spin` раундов (`yield` + поиск, по умолчанию 32, DECISIONS #32) отмечен как «ищущий»,
-  затем регистрируется спящим и паркуется (`Parker`, таймаут-страховка 50 мс). Новая задача
-  будит одного спящего, только если нет ищущих. Перед кражей у жертвы — `is_empty`: `steal`
-  в crossbeam входит в эпоху ещё до проверки длины.
-- **Запуск:** `ThreadPool::new` ждёт, пока каждый воркер не пройдёт инициализацию потока
-  (приоритет/affinity, регистрация в эпохе crossbeam, контекст воркера). Одноразовые
-  выделения потока не попадают в кадры, даже если воркерам не хватает ядер (DECISIONS #39).
-- **`join`** (DECISIONS #30): вторая ветвь — задача на стеке с латчем
-  (`pragma_sync::__private::join_on_stack`). Участник пула (воркер или главный поток во внешнем слоте)
-  кладёт её в свою LIFO-очередь, исполняет первую ветвь и снимает задачу обратно: если её не
-  украли — исполняет сам, без атомарных RMW и аллокаций. Украденную ждёт, помогая; без работы —
-  объявляет сон в латче и паркуется на своём `Parker` (у внешних слотов они свои), вор будит его
-  по индексу. Поток вне пула без свободного слота идёт прежним путём — через область.
-  Спящих после push ветви проверяет без `fence(SeqCst)` (DECISIONS #40): разминуться с
-  засыпающим воркером здесь значит потерять параллелизм, а не зависнуть — ветвь владелец снимет
-  сам.
-- `unsafe` для стирания лайфтайма задач `scope` и задач на стеке (`StackSlot`, `StackJob`) живёт
-  в `pragma_sync` (DECISIONS #15, #30); `pragma_jobs` — `forbid(unsafe_code)`.
-- Платформенные настройки воркеров (M4): `PoolConfig::with_thread_priority` и `with_affinity`
-  применяет сам воркер при старте через `pragma_jobs::sys` (§7); отказ ОС — предупреждение.
-- Метрики (M4): у каждого потока пула (воркеры и внешние слоты) свой набор счётчиков на своей
-  кэш-линии, пишет его один поток (`load` + `store`, без RMW). `ThreadPool::stats()` читает их и
-  длины очередей без блокировок; на исполнение и детерминизм не влияет.
+- The default number of workers is `logical cores − 1`: the main thread takes part in the work.
+- The local queue is a `crossbeam_deque::Worker` (LIFO for cache locality); stealing is FIFO
+  from the tail of another queue. External tasks go through the `Injector`.
+- The order of looking for work: own queue → injector → a random victim to steal from → a short spin
+  with `Backoff` → parking. Wakeup is targeted: one sleeping worker is woken per new task,
+  not all of them at once.
+- **A wait never blocks a worker idly.** `join`/`scope`/`JobHandle::join`
+  run other tasks while waiting for their own (help-while-wait). This rules out a deadlock of nested
+  `join`s with any number of threads, including one.
+- **The main thread is a temporary pool participant.** For the duration of `scope`/`join`/`JobHandle::join`
+  a thread outside the pool occupies one of 4 external slots: its own LIFO queue, visible to thieves
+  (DECISIONS #16). Otherwise its subtasks would go into the FIFO injector, and helping while waiting would take
+  the oldest tasks, growing the stack. If the slots are taken, it works through the injector. The slot context
+  is cached per thread (the queues go back into the slot and a placeholder takes their place), so entering
+  the pool once per frame does not allocate (DECISIONS #18).
+- Sleep and wakeup: a worker that found no work first spins with `Backoff`, then for another
+  `idle_spin` rounds (`yield` + search, 32 by default, DECISIONS #32) is marked as "searching",
+  then registers as sleeping and parks (`Parker`, a 50 ms timeout safety net). A new task
+  wakes one sleeper only if there are no searchers. Before stealing from a victim, `is_empty`: crossbeam's
+  `steal` enters an epoch even before checking the length.
+- **Startup:** `ThreadPool::new` waits until every worker has gone through thread initialization
+  (priority/affinity, registration in the crossbeam epoch, the worker context). One-time
+  thread allocations do not land in frames, even if there are not enough cores for the workers (DECISIONS #39).
+- **`join`** (DECISIONS #30): the second branch is a stack job with a latch
+  (`pragma_sync::__private::join_on_stack`). A pool participant (a worker or the main thread in an external slot)
+  pushes it into its LIFO queue, runs the first branch and pops the job back: if it was not
+  stolen, it runs it itself, with no atomic RMW and no allocations. A stolen one it waits for while helping; with no work it
+  announces sleep in the latch and parks on its `Parker` (external slots have their own), and the thief wakes it
+  by index. A thread outside the pool without a free slot takes the old path, through a scope.
+  After pushing the branch, it checks for sleepers without `fence(SeqCst)` (DECISIONS #40): missing a
+  worker that is falling asleep here means losing parallelism, not hanging, since the owner takes the branch back
+  itself.
+- The `unsafe` for lifetime erasure of `scope` tasks and of stack tasks (`StackSlot`, `StackJob`) lives
+  in `pragma_sync` (DECISIONS #15, #30); `pragma_jobs` is `forbid(unsafe_code)`.
+- Worker platform settings (M4): `PoolConfig::with_thread_priority` and `with_affinity`
+  are applied by the worker itself at startup via `pragma_jobs::sys` (§7); an OS refusal is a warning.
+- Metrics (M4): every pool thread (workers and external slots) has its own set of counters on its own
+  cache line, written by one thread (`load` + `store`, no RMW). `ThreadPool::stats()` reads them and
+  the queue lengths without locking; it does not affect execution or determinism.
 
 API (M1):
 
 ```rust
-let pool = ThreadPool::new(PoolConfig::default())?;      // Result, не паника
+let pool = ThreadPool::new(PoolConfig::default())?;      // a Result, not a panic
 
-let (a, b) = pool.join(|| heavy_a(), || heavy_b())?;     // fork-join, Err при панике ветви
+let (a, b) = pool.join(|| heavy_a(), || heavy_b())?;     // fork-join, Err if a branch panics
 
-pool.scope(|s| {                                         // задачи могут занимать ссылки
+pool.scope(|s| {                                         // tasks may hold references
     for chunk in data.chunks_mut(1024) {
-        s.spawn(move || process(chunk));                 // `s` — Copy, его можно захватить
+        s.spawn(move || process(chunk));                 // `s` is Copy and can be captured
     }
-})?;                                                      // Err, если задача запаниковала
+})?;                                                      // Err if a task panicked
 
 pool.parallel_for(&mut items, Grain::Auto, |item| item.update(dt))?;
 let total = pool.parallel_reduce(&items, Grain::Auto, |_, c| sum(c), |a, b| a + b)?;
@@ -103,163 +103,163 @@ let handle = pool.spawn(Priority::Background, || bake_navmesh());
 let result = handle.join()?;                              // Result<T, JobError>
 ```
 
-`Grain::Auto` делит данные на ~128 чанков (не меньше 64 элементов) — разбиение зависит только
-от длины, а не от числа воркеров, поэтому `parallel_reduce` побитово воспроизводим (§6).
+`Grain::Auto` splits the data into ~128 chunks (no fewer than 64 elements each): the split depends only
+on the length, not on the number of workers, so `parallel_reduce` is bit-for-bit reproducible (§6).
 
-### 3.2 Приоритеты
+### 3.2 Priorities
 
-| Приоритет | Для чего | Политика |
+| Priority | Purpose | Policy |
 |---|---|---|
-| `Frame` | Работа текущего кадра (граф, `parallel_for`) | Всегда первым |
-| `Normal` | Задачи без дедлайна кадра | После `Frame` |
-| `Background` | Запекание, декомпрессия, стриминг | Отдельная очередь, лимит на число одновременно занятых воркеров |
+| `Frame` | Work of the current frame (graph, `parallel_for`) | Always first |
+| `Normal` | Tasks without a frame deadline | After `Frame` |
+| `Background` | Baking, decompression, streaming | A separate queue, a limit on the number of simultaneously busy workers |
 
-Фоновые задачи **не должны** голодом задерживать кадр: лимит занятых воркеров плюс проверка
-очереди `Frame` между фоновыми задачами.
+Background tasks **must not** starve the frame: a limit on busy workers plus a check of the
+`Frame` queue between background tasks.
 
-- `Frame` и `Normal` — локальные очереди воркеров и свои injector-ы; `Background` — только
-  глобальная очередь. Лимит (`PoolConfig::with_background_limit`, по умолчанию половина
-  воркеров) считает воркеры, а не задачи: фоновая задача, ждущая другую фоновую, исполняет её
-  в счёт своего слота, поэтому лимит 1 не дедлочит.
-- Подзадачи `join`/`scope`/`parallel_*` наследуют приоритет текущей задачи; вне пула —
-  `Frame`; у фоновой задачи — `Normal` (иначе они упёрлись бы в лимит, который держит родитель).
-- Поток вне пула фоновые задачи не исполняет даже в ожидании.
+- `Frame` and `Normal` use the workers' local queues and their own injectors; `Background` uses only the
+  global queue. The limit (`PoolConfig::with_background_limit`, half of the workers by default)
+  counts workers, not tasks: a background task waiting for another background task runs it
+  against its own slot, so a limit of 1 does not deadlock.
+- Subtasks of `join`/`scope`/`parallel_*` inherit the priority of the current task; outside the pool it is
+  `Frame`; for a background task it is `Normal` (otherwise they would hit the limit held by their parent).
+- A thread outside the pool does not run background tasks, even while waiting.
 
-### 3.3 Граф кадра (`pragma_graph`, M2)
+### 3.3 The frame graph (`pragma_graph`, M2)
 
-Задача объявляет, что читает и что пишет:
+A task declares what it reads and what it writes:
 
 ```rust
-let mut g = FrameGraph::builder();   // FrameGraph::builder().ordered() — режим `ordered`
+let mut g = FrameGraph::builder();   // FrameGraph::builder().ordered() for the `ordered` mode
 g.task("input", |t| t.writes::<InputState>(), input_system);
 g.task("physics", |t| t.reads::<InputState>().writes::<Bodies>().after("input"), physics_step);
 g.task("transforms", |t| t.reads::<Bodies>().writes::<Transforms>().after("physics"), propagate);
 g.task("audio", |t| t.reads::<Transforms>().after("transforms"), audio_update);
-let mut graph = g.build()?;      // проверка: дубли, неизвестные зависимости, циклы, неявные конфликты
+let mut graph = g.build()?;      // checks: duplicates, unknown dependencies, cycles, implicit conflicts
 graph.run(&pool, &mut resources)?;
-println!("{}", graph.to_mermaid()); // или to_dot(): задачи, доступ и рёбра для отладки
+println!("{}", graph.to_mermaid()); // or to_dot(): tasks, access and edges for debugging
 ```
 
-Система — `Fn(&TaskContext) -> R`, где `R` — `()` или `Result<(), E>`. Ресурсы берутся через
-`ctx.read::<T>()` / `ctx.write::<T>()`; для вложенного параллелизма есть `ctx.pool()`.
+A system is `Fn(&TaskContext) -> R`, where `R` is `()` or `Result<(), E>`. Resources are taken via
+`ctx.read::<T>()` / `ctx.write::<T>()`; for nested parallelism there is `ctx.pool()`.
 
-- Две задачи **конфликтуют**, если одна пишет ресурс, который другая читает или пишет.
-  Конфликт без явного порядка (`before`/`after` или порядок объявления в режиме `ordered`) —
-  **ошибка сборки** `GraphError::AmbiguousOrder`, а не гонка, проявляющаяся раз в сто запусков.
-  Порядок проверок и приоритет ошибок: `DuplicateTask` → `UnknownDependency` → `Cycle` явных
-  рёбер → `AmbiguousOrder` (в `ordered` — `Cycle` после добавления рёбер по объявлению; явный
-  порядок важнее порядка объявления).
-- Сборка (`build`) делается один раз: стабильная топосортировка, транзитивная редукция рёбер,
-  списки последователей и черновики под готовые задачи — всё выделяется здесь.
-- Топологический порядок со **стабильным** разрешением ничьих (по порядку регистрации) —
-  основа воспроизводимости при отладке (`FrameGraph::order`, `FrameGraph::edges`).
-- Исполнение — dataflow без аллокаций (DECISIONS #18): у каждой задачи атомарный счётчик
-  незавершённых предшественников, сбрасываемый в начале кадра. Задача, завершившись, уменьшает
-  счётчики последователей; ставшие готовыми запускает сама — одну продолжает в цикле на своём
-  потоке (цепочки не растят стек), несколько делит пополам через `join` (он кладёт задачу в
-  слот на стеке, а не в `Box`). Весь кадр — одна `scope`, поэтому главный поток входит в пул
-  один раз и сам исполняет задачи.
-- Ресурсы (`Resources`) — по одному значению на тип, каждое в своём `RwLock`-слоте. Граф при
-  сборке доказывает, что одновременно исполняемые задачи не конфликтуют, поэтому в кадре слоты
-  берутся через `try_read`/`try_write` и никогда не ждут; занятый слот — ошибка
-  `BorrowConflict`, необъявленный доступ — `UndeclaredAccess`, а не тихая гонка. `unsafe` не
-  нужен. Перед кадром проверяется, что все объявленные ресурсы есть (`MissingResource`).
-- Ошибка или паника задачи не останавливает независимые ветви, но её последователи в этом кадре
-  не запускаются. `run` возвращает ошибку задачи с наименьшим индексом регистрации — результат
-  не зависит от расписания.
-- Задел для конвейеризации кадров (симуляция N+1 параллельно с подготовкой рендера N): граф
-  не владеет ресурсами, его можно исполнять над разными экземплярами `Resources`
-  («extract»-копия).
+- Two tasks **conflict** if one writes a resource the other reads or writes.
+  A conflict without an explicit order (`before`/`after` or declaration order in the `ordered` mode) is
+  a **build error** `GraphError::AmbiguousOrder`, not a race that shows up once in a hundred runs.
+  The order of checks and error precedence: `DuplicateTask` → `UnknownDependency` → `Cycle` of explicit
+  edges → `AmbiguousOrder` (in `ordered` mode, `Cycle` after adding edges by declaration; an explicit
+  order takes precedence over declaration order).
+- The build (`build`) happens once: a stable topological sort, transitive reduction of edges,
+  successor lists and scratch space for ready tasks; everything is allocated here.
+- A topological order with **stable** tie-breaking (by registration order) is the
+  basis of reproducibility when debugging (`FrameGraph::order`, `FrameGraph::edges`).
+- Execution is allocation-free dataflow (DECISIONS #18): every task has an atomic counter of
+  unfinished predecessors, reset at the start of the frame. A task that finishes decrements
+  its successors' counters and launches the ones that became ready itself: it continues one in a loop on its
+  own thread (chains do not grow the stack) and splits several in half via `join` (which puts the task into
+  a stack slot rather than a `Box`). The whole frame is one `scope`, so the main thread enters the pool
+  once and runs tasks itself.
+- Resources (`Resources`) are one value per type, each in its own `RwLock` slot. At build time the graph
+  proves that concurrently running tasks do not conflict, so during a frame the slots
+  are taken via `try_read`/`try_write` and never wait; a busy slot is a
+  `BorrowConflict` error and an undeclared access is `UndeclaredAccess`, rather than a silent race. No `unsafe`
+  is needed. Before the frame it checks that all declared resources are present (`MissingResource`).
+- An error or panic of a task does not stop independent branches, but its successors do not
+  run in that frame. `run` returns the error of the task with the lowest registration index, so the result
+  does not depend on scheduling.
+- Groundwork for frame pipelining (simulating N+1 in parallel with preparing the render of N): the graph
+  does not own the resources, so it can run over different `Resources` instances
+  (an "extract" copy).
 
-### 3.4 Async-задачи (`pragma_async`, M3)
+### 3.4 Async tasks (`pragma_async`, M3)
 
 ```rust
-let exec = Executor::new(&pool, AsyncConfig::default())?;   // blocking-пул: 4 потока, 1024 задачи
+let exec = Executor::new(&pool, AsyncConfig::default())?;   // blocking pool: 4 threads, 1024 tasks
 let io = exec.clone();
-let mut level = exec.spawn_async(async move {               // future — на воркерах пула (Background)
-    let bytes = io.unblock(|| std::fs::read("level.bin")).await??; // синхронный I/O — в blocking-пуле
-    Ok::<_, Box<dyn Error + Send + Sync>>(parse_level(&bytes)?)     // разбор — снова на воркере
+let mut level = exec.spawn_async(async move {               // the future runs on pool workers (Background)
+    let bytes = io.unblock(|| std::fs::read("level.bin")).await??; // synchronous I/O in the blocking pool
+    Ok::<_, Box<dyn Error + Send + Sync>>(parse_level(&bytes)?)     // parsing back on a worker
 });
-// игровой цикл, начало кадра:
-if let Some(result) = level.poll_ready() { /* применить */ }
+// game loop, start of the frame:
+if let Some(result) = level.poll_ready() { /* apply */ }
 ```
 
-- **Исполнитель** (`Executor`) — на `async-task` (DECISIONS #8): future превращается в
-  `Runnable`, который планируется в пул с приоритетом `Background` через
-  `pragma_jobs::Spawner` — лёгкую ссылку на пул (`Weak`), которая кладёт задачу без хэндла
-  (DECISIONS #24). Отдельного пула потоков для async нет; лимит фоновых воркеров (§3.2)
-  ограничивает и async-задачи, кадр они не вытесняют.
-- **I/O-модель** (DECISIONS #23): реактора (epoll/IOCP) нет — файловый I/O на Windows и Linux
-  синхронный. `Executor::unblock(f)` исполняет замыкание в ограниченном blocking-пуле:
-  потоки создаются по требованию до `blocking_threads`, поставленных задач (в очереди и в
-  работе) — не больше `blocking_capacity`; сверх лимита вызов сразу возвращает хэндл с
-  `AsyncError::Overloaded`, вызывающий не ждёт. Blocking-задача — тоже `Runnable`, поэтому
-  результат, отмена и пробуждение ожидающего future — механика `async-task`, без своих каналов.
-- **Отмена** — сброс `AsyncHandle`: future сбрасывается на исполнителе (если он сейчас в
-  `poll` — сразу после него), невзятая blocking-задача не запускается. `detach()` — доработать
-  без хэндла. Остановка пула отменяет задачи при следующем планировании, остановка
-  исполнителя — невзятые blocking-задачи (выполняющиеся дорабатывают: синхронный I/O не
-  прервать). Ожидающие получают `AsyncError::Cancelled`, а не зависают.
-- **Паника** в future или в замыкании `unblock` — `AsyncError::Panicked { task, message }`,
-  воркер и blocking-поток живы.
-- **Мост «async → кадр»**: `AsyncHandle::poll_ready()` — неблокирующая проверка в начале
-  кадра; хэндл — ещё и `Future` для `.await` из других задач. Блокирующий `wait()` разрешён
-  только вне работы пула (экран загрузки между кадрами); из воркера или из кадра графа он
-  сразу возвращает `AsyncError::WouldBlock` (DECISIONS #25) — правило «никакого `block_on`
-  в задачах кадра» проверяется машиной.
-- **Детерминизм** с фоновой загрузкой (пример `examples/frame_sim`, DECISIONS #26): результат
-  применяется на заранее известном тике; готовый раньше — ждёт в буфере, опоздавший —
-  дожидается главный поток между кадрами. Хеш состояния не зависит ни от числа воркеров,
-  ни от момента завершения загрузки.
+- **The executor** (`Executor`) is built on `async-task` (DECISIONS #8): a future becomes a
+  `Runnable` that is scheduled into the pool with `Background` priority via
+  `pragma_jobs::Spawner`, a lightweight reference to the pool (`Weak`) that queues a task without a handle
+  (DECISIONS #24). There is no separate thread pool for async; the background worker limit (§3.2)
+  also bounds async tasks, so they do not displace the frame.
+- **The I/O model** (DECISIONS #23): there is no reactor (epoll/IOCP), since file I/O on Windows and Linux
+  is synchronous. `Executor::unblock(f)` runs the closure in a bounded blocking pool:
+  threads are created on demand up to `blocking_threads`, and queued tasks (waiting and
+  running) are at most `blocking_capacity`; beyond the limit the call immediately returns a handle with
+  `AsyncError::Overloaded`, and the caller does not wait. A blocking task is a `Runnable` too, so
+  the result, cancellation and waking the waiting future are `async-task` mechanics, with no channels of our own.
+- **Cancellation** is dropping the `AsyncHandle`: the future is dropped on the executor (if it is inside
+  `poll` right now, then right after it), and a blocking task not yet taken never starts. `detach()` lets it finish
+  without a handle. Stopping the pool cancels tasks at their next scheduling; stopping the
+  executor cancels blocking tasks not yet taken (running ones finish, since synchronous I/O cannot be
+  interrupted). Waiters get `AsyncError::Cancelled` instead of hanging.
+- **A panic** in a future or in an `unblock` closure is `AsyncError::Panicked { task, message }`;
+  the worker and the blocking thread stay alive.
+- **The "async → frame" bridge**: `AsyncHandle::poll_ready()` is a non-blocking check at the start of
+  a frame; the handle is also a `Future` for `.await` from other tasks. A blocking `wait()` is allowed
+  only outside pool work (a loading screen between frames); from a worker or a graph frame it
+  immediately returns `AsyncError::WouldBlock` (DECISIONS #25), so the rule "no `block_on`
+  in frame tasks" is machine-checked.
+- **Determinism** with background loading (the `examples/frame_sim` example, DECISIONS #26): the result
+  is applied at a tick known in advance; one ready earlier waits in a buffer, a late one is
+  waited for by the main thread between frames. The state hash depends neither on the number of workers
+  nor on when the load finished.
 
-## 4. Ошибки, паники и завершение работы
+## 4. Errors, panics and shutdown
 
-- Каждый крейт: один `#[non_exhaustive]` enum ошибок (`thiserror`) с контекстом
-  (имя задачи, имя потока, индекс хэндла).
-- Паника в задаче перехватывается (`catch_unwind`) и возвращается из `join`/`scope`/хэндла
-  как ошибка; воркер продолжает работу (DECISIONS #9).
-- `Drop` пула: перестаёт принимать задачи → дожидается или отменяет очередь (настраивается) →
-  будит и `join`-ит потоки. Утечка потоков после `Drop` — баг.
+- Every crate has one `#[non_exhaustive]` error enum (`thiserror`) with context
+  (task name, thread name, handle index).
+- A panic in a task is caught (`catch_unwind`) and returned from `join`/`scope`/the handle
+  as an error; the worker keeps running (DECISIONS #9).
+- The pool's `Drop`: stops accepting tasks → drains or cancels the queue (configurable) →
+  wakes and `join`s the threads. Leaked threads after `Drop` are a bug.
 
-## 5. Наблюдаемость
+## 5. Observability
 
-- `tracing`: span `graph_task` (поля `task`, `priority`, `worker`) и `frame_graph` — уровень
-  `DEBUG`; `scope`/`parallel_for`/`parallel_reduce` — `TRACE`. Поля вычисляются, только если
-  уровень включён; выключается при компиляции фичами `tracing` (`max_level_*`,
-  `release_max_level_*`). Кадр графа и с подписчиком не аллоцирует (`tests/alloc.rs`).
-- Метрики пула: `ThreadPool::stats() -> PoolStats` — по воркерам и внешним потокам: задач
-  выполнено, краж, парковок, время простоя и сна, глубина локальных и глобальных очередей.
-- Контекст текущей задачи (DECISIONS #28): `pragma_jobs::labeled(kind, name, f)` ставит метку,
-  `current_task(|t| …)` читает её (с цепочкой внешних меток потока) без аллокаций и блокировок —
-  из panic hook или обработчика падений. Метки у задач графа (`graph`), `spawn`/`spawn_named`,
-  задач `scope`/`parallel_*`, `spawn_detached`, async (`spawn_async_named`) и `unblock`; вторая
-  ветвь `join` метки не получает (горячий путь), виновника называет внешняя метка.
-- Watchdog (только debug, DECISIONS #29): поток пула, задача с меткой на котором исполняется
-  дольше `PoolConfig::with_watchdog` (5 с по умолчанию), — одно предупреждение
-  `pragma_jobs::watchdog` с именем задачи и потока. В release кода нет.
-- Feature `puffin` (puffin 0.19.1): области на кадр графа, задачи графа и операции пула; кадр
-  размечает приложение. Tracy — только по отдельному решению, потому что это C++ (`deny.toml`).
+- `tracing`: the `graph_task` (fields `task`, `priority`, `worker`) and `frame_graph` spans at
+  `DEBUG`; `scope`/`parallel_for`/`parallel_reduce` at `TRACE`. Fields are evaluated only if the
+  level is enabled; levels are compiled out with the `tracing` features (`max_level_*`,
+  `release_max_level_*`). A graph frame does not allocate even with a subscriber (`tests/alloc.rs`).
+- Pool metrics: `ThreadPool::stats() -> PoolStats`, per worker and for external threads: tasks
+  executed, steals, parks, idle and sleep time, the depth of local and global queues.
+- The current task context (DECISIONS #28): `pragma_jobs::labeled(kind, name, f)` sets a label,
+  `current_task(|t| …)` reads it (with the chain of the thread's outer labels) without allocations or locks,
+  from a panic hook or a crash handler. Labels are set on graph tasks (`graph`), `spawn`/`spawn_named`,
+  `scope`/`parallel_*` tasks, `spawn_detached`, async (`spawn_async_named`) and `unblock`; the second
+  branch of `join` gets no label (a hot path), and the outer label names the culprit.
+- The watchdog (debug only, DECISIONS #29): a pool thread on which a labeled task has been running
+  longer than `PoolConfig::with_watchdog` (5 s by default) produces one
+  `pragma_jobs::watchdog` warning with the task and thread names. No code in release.
+- The `puffin` feature (puffin 0.19.1): scopes for the graph frame, graph tasks and pool operations; the application
+  marks frames. Tracy only by a separate decision, because it is C++ (`deny.toml`).
 
-## 6. Детерминизм
+## 6. Determinism
 
-Результат не должен зависеть от того, какой поток что исполнил:
+The result must not depend on which thread ran what:
 
-- `parallel_for` с редукцией объединяет частичные результаты в **фиксированном порядке чанков**,
-  а не в порядке завершения.
-- Граф кадра: явный порядок конфликтующих задач; стабильная топосортировка.
-- Ядро не использует `thread_rng`, `Instant::now()` в логике и `HashMap` со случайным seed там,
-  где порядок итерации влияет на результат.
-- Тест детерминизма: с M3 — `examples/frame_sim` в CI (хеш каждого тика на 1 и 4 воркерах,
-  с мгновенной и запаздывающей фоновой загрузкой); в M5 — обязательный набор сценариев.
+- `parallel_for` with a reduction combines partial results in a **fixed chunk order**,
+  not in completion order.
+- The frame graph: an explicit order for conflicting tasks; a stable topological sort.
+- The core does not use `thread_rng`, `Instant::now()` in logic, or a randomly seeded `HashMap` where
+  the iteration order affects the result.
+- The determinism test: since M3, `examples/frame_sim` in CI (the hash of every tick on 1 and 4 workers,
+  with an instant and a delayed background load); since M5, a mandatory suite of scenarios.
 
-## 7. Платформы
+## 7. Platforms
 
-Windows и Linux, x86_64 (DECISIONS #2). Платформенный код (имена потоков, приоритеты потоков,
-affinity) лежит только в крейте `pragma_sys` (L1, DECISIONS #27; в `pragma_jobs` — re-export
-`pragma_jobs::sys`) за `cfg(target_os)` и использует системные FFI (`windows-sys`, `libc`).
-Каждый вызов — `// SAFETY:`; Miri FFI не исполняет, поэтому крейт проверяется тестами на
-реальной ОС в CI обеих платформ. На других ОС функции возвращают `SysError::Unsupported`.
-Ограничения: на Windows affinity — ядра первой группы (`< 64`); на Linux повышение приоритета
-требует `CAP_SYS_NICE`, а без прав нельзя и вернуть `nice` назад после `Low`. Если позже понадобится wasm, help-while-wait позволяет добавить
-однопоточный режим (все задачи исполняет вызывающий поток) без изменения публичного API.
-Это отдельная веха.
+Windows and Linux, x86_64 (DECISIONS #2). Platform code (thread names, thread priorities,
+affinity) lives only in the `pragma_sys` crate (L1, DECISIONS #27; re-exported in `pragma_jobs` as
+`pragma_jobs::sys`) behind `cfg(target_os)` and uses system FFI (`windows-sys`, `libc`).
+Every call has a `// SAFETY:`; Miri does not execute FFI, so the crate is checked by tests on a
+real OS in CI on both platforms. On other OSes the functions return `SysError::Unsupported`.
+Limitations: on Windows, affinity covers the cores of the first group (`< 64`); on Linux, raising the priority
+requires `CAP_SYS_NICE`, and without privileges `nice` cannot be moved back after `Low` either. If wasm is needed later,
+help-while-wait allows adding a single-threaded mode (the calling thread runs all tasks) without changing the public API.
+That is a separate milestone.

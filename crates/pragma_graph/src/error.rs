@@ -1,109 +1,109 @@
 use pragma_jobs::JobError;
 
-/// Ошибки построения и исполнения графа.
+/// Errors of building and running the graph.
 ///
-/// Ошибки сборки ([`FrameGraphBuilder::build`]) возвращаются до первого кадра и называют задачи
-/// по именам; ошибки кадра ([`FrameGraph::run`]) — первая ошибка задачи с наименьшим индексом
-/// регистрации, поэтому при одинаковых сбоях результат не зависит от расписания потоков.
+/// Build errors ([`FrameGraphBuilder::build`]) are returned before the first frame and name the tasks;
+/// frame errors ([`FrameGraph::run`]) are the first error of the task with the lowest registration
+/// index, so with identical failures the result does not depend on thread scheduling.
 ///
 /// [`FrameGraphBuilder::build`]: crate::FrameGraphBuilder::build
 /// [`FrameGraph::run`]: crate::FrameGraph::run
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GraphError {
-    /// В графе есть цикл зависимостей.
+    /// The graph has a dependency cycle.
     #[error("dependency cycle: {}", tasks.join(" -> "))]
     #[non_exhaustive]
     Cycle {
-        /// Задачи, образующие цикл, в порядке рёбер (от последней ребро ведёт к первой).
+        /// The tasks forming the cycle, in edge order (an edge leads from the last one to the first).
         tasks: Vec<String>,
     },
-    /// Две задачи пишут (или пишут/читают) один ресурс без явного порядка.
+    /// Two tasks write (or write/read) the same resource without an explicit order.
     #[error("tasks `{a}` and `{b}` conflict on resource `{resource}` without explicit ordering")]
     #[non_exhaustive]
     AmbiguousOrder {
-        /// Первая задача (в порядке регистрации).
+        /// The first task (in registration order).
         a: String,
-        /// Вторая задача.
+        /// The second task.
         b: String,
-        /// Ресурс конфликта.
+        /// The conflicting resource.
         resource: String,
     },
-    /// Зависимость на незарегистрированную задачу.
+    /// A dependency on a task that is not registered.
     #[error("task `{task}` depends on unknown task `{missing}`")]
     #[non_exhaustive]
     UnknownDependency {
-        /// Задача с зависимостью.
+        /// The task with the dependency.
         task: String,
-        /// Отсутствующая задача.
+        /// The missing task.
         missing: String,
     },
-    /// Имя задачи зарегистрировано дважды.
+    /// A task name is registered twice.
     #[error("task `{task}` is registered twice")]
     #[non_exhaustive]
     DuplicateTask {
-        /// Повторяющееся имя.
+        /// The repeated name.
         task: String,
     },
-    /// Граф не помещается в лимиты сборки ([`MAX_TASKS`](crate::MAX_TASKS),
-    /// [`MAX_EDGES`](crate::MAX_EDGES)) или память для плана не выделилась — вместо `abort`
-    /// на большом входе.
+    /// The graph does not fit the build limits ([`MAX_TASKS`](crate::MAX_TASKS),
+    /// [`MAX_EDGES`](crate::MAX_EDGES)) or memory for the plan could not be allocated; returned
+    /// instead of an `abort` on a large input.
     #[error("frame graph with {tasks} tasks is too large: {reason}")]
     #[non_exhaustive]
     TooLarge {
-        /// Число задач в описании.
+        /// Number of tasks in the description.
         tasks: usize,
-        /// Какой лимит превышен (или нехватка памяти).
+        /// Which limit was exceeded (or out of memory).
         reason: &'static str,
     },
-    /// Задача объявила ресурс, которого нет в [`Resources`](crate::Resources).
+    /// A task declared a resource that is not in [`Resources`](crate::Resources).
     #[error("task `{task}` needs resource `{resource}`, which is missing")]
     #[non_exhaustive]
     MissingResource {
-        /// Первая задача, объявившая ресурс.
+        /// The first task that declared the resource.
         task: String,
-        /// Ресурс.
+        /// The resource.
         resource: String,
     },
-    /// Задача обратилась к ресурсу, не объявив такой доступ.
+    /// A task accessed a resource without declaring that access.
     #[error("task `{task}` accessed `{resource}` for {access} without declaring it")]
     #[non_exhaustive]
     UndeclaredAccess {
-        /// Задача.
+        /// The task.
         task: String,
-        /// Ресурс.
+        /// The resource.
         resource: String,
-        /// `"read"` или `"write"`.
+        /// `"read"` or `"write"`.
         access: &'static str,
     },
-    /// Ресурс уже заимствован (например, задача дважды взяла его на запись).
+    /// The resource is already borrowed (for example a task took it for writing twice).
     #[error("task `{task}`: resource `{resource}` is already borrowed")]
     #[non_exhaustive]
     BorrowConflict {
-        /// Задача.
+        /// The task.
         task: String,
-        /// Ресурс.
+        /// The resource.
         resource: String,
     },
-    /// Задача вернула ошибку.
+    /// A task returned an error.
     #[error("task `{task}` failed: {message}")]
     #[non_exhaustive]
     TaskFailed {
-        /// Задача.
+        /// The task.
         task: String,
-        /// Текст ошибки.
+        /// The error text.
         message: String,
     },
-    /// Задача запаниковала; паника перехвачена, зависимые задачи этого кадра не запускались.
+    /// A task panicked; the panic was caught, and the dependent tasks of this frame did not run.
     #[error("task `{task}` panicked: {message}")]
     #[non_exhaustive]
     TaskPanicked {
-        /// Задача.
+        /// The task.
         task: String,
-        /// Сообщение паники, если оно было строкой.
+        /// The panic message, if it was a string.
         message: String,
     },
-    /// Ошибка пула задач.
+    /// A job pool error.
     #[error(transparent)]
     Job(#[from] JobError),
 }

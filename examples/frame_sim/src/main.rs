@@ -1,16 +1,16 @@
-//! CLI вертикального среза `pragma.core`.
+//! The CLI of the `pragma.core` vertical slice.
 //!
 //! ```text
 //! frame_sim [--entities N] [--ticks N] [--workers N] [--apply-tick N] [--latency-ms N]
-//!           [--verify W1,W2,...] [--mermaid]
+//!           [--verify W1,W2,...] [--suite] [--mermaid]
 //! ```
 //!
-//! `--verify` прогоняет сценарий на каждом числе воркеров дважды — с мгновенной и с
-//! запаздывающей загрузкой — и сверяет хеши всех тиков. Расхождение — код выхода 1.
+//! `--verify` runs the scenario on each worker count twice, with an instant and with a
+//! delayed load, and compares the hashes of all ticks. A mismatch means exit code 1.
 //!
-//! `--suite` — обязательный набор детерминизма ([`frame_sim::determinism_suite`]): несколько
-//! сценариев на 1, 2 и N воркерах (N — ядра минус главный поток, без переподписки; список
-//! можно задать через `--verify`) и варианты окружения, включая подписчик `tracing`.
+//! `--suite` is the mandatory determinism suite ([`frame_sim::determinism_suite`]): several
+//! scenarios on 1, 2 and N workers (N is the cores minus the main thread, no oversubscription; the list
+//! can be given with `--verify`) and environment variants, including a `tracing` subscriber.
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
@@ -21,8 +21,8 @@ use frame_sim::{SimConfig, SimReport, Verdict, compare, default_workers, run};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
 
-/// Задержка «медленного диска» в режиме `--verify`: загрузка почти наверняка не успевает к
-/// тику применения, и главный поток ждёт её между кадрами.
+/// The "slow disk" delay in `--verify` mode: the load almost certainly misses the
+/// apply tick, and the main thread waits for it between frames.
 const SLOW_LOAD: Duration = Duration::from_millis(250);
 
 struct Args {
@@ -32,8 +32,8 @@ struct Args {
     mermaid: bool,
 }
 
-/// Подписчик набора детерминизма: включает все span и считает их (проверка, что
-/// инструментирование действительно работало во время прогона).
+/// The determinism suite's subscriber: enables all spans and counts them (a check that
+/// the instrumentation actually worked during the run).
 struct CountingSubscriber;
 
 static SPANS: AtomicU64 = AtomicU64::new(0);
@@ -139,7 +139,7 @@ fn verify(base: &SimConfig, workers: &[usize]) -> Result<bool, frame_sim::SimErr
     Ok(ok)
 }
 
-/// Числа воркеров набора по умолчанию: 1, 2 и N без переподписки.
+/// The suite's default worker counts: 1, 2 and N without oversubscription.
 fn suite_workers() -> Vec<usize> {
     let n = default_workers();
     let mut workers = vec![1, 2.min(n), n];
@@ -147,8 +147,8 @@ fn suite_workers() -> Vec<usize> {
     workers
 }
 
-/// Обязательный набор детерминизма. Прогоны с подписчиком `tracing` идут вторым проходом:
-/// глобальный подписчик ставится один раз и не снимается.
+/// The mandatory determinism suite. Runs with a `tracing` subscriber go in a second pass:
+/// the global subscriber is installed once and never removed.
 fn suite(base: &SimConfig, workers: &[usize]) -> Result<bool, frame_sim::SimError> {
     let scenarios = frame_sim::determinism_suite(base.ticks, base.entities, workers, SLOW_LOAD);
     let mut references: Vec<Option<Vec<u64>>> = vec![None; scenarios.len()];

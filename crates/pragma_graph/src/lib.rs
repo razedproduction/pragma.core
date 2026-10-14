@@ -1,14 +1,14 @@
-//! L3: граф задач кадра `pragma.core`.
+//! L3: the frame graph of `pragma.core`.
 //!
-//! Задача объявляет, какие ресурсы читает и пишет, и, при необходимости, явный порядок
-//! (`before`/`after`). [`FrameGraphBuilder::build`] один раз проверяет описание: циклы,
-//! неизвестные зависимости и **конфликты без порядка** (одна задача пишет то, что другая
-//! читает или пишет) — ошибка сборки, а не гонка в кадре. [`FrameGraph::run`] каждый кадр
-//! исполняет задачи на пуле `pragma_jobs`: независимые — параллельно, без аллокаций
+//! A task declares which resources it reads and writes and, if needed, an explicit order
+//! (`before`/`after`). [`FrameGraphBuilder::build`] validates the description once: cycles,
+//! unknown dependencies and **unordered conflicts** (one task writes what another one
+//! reads or writes) are a build error rather than a race in the frame. [`FrameGraph::run`] runs
+//! the tasks on a `pragma_jobs` pool every frame: independent ones in parallel, with no allocations
 //! (`docs/architecture.md` §3.3).
 //!
-//! Ресурсы лежат в [`Resources`] — по одному значению каждого типа. Граф ими не владеет,
-//! поэтому один граф можно исполнять над разными экземплярами состояния.
+//! Resources live in [`Resources`], one value per type. The graph does not own them,
+//! so a single graph can run over different instances of the state.
 //!
 //! ```
 //! use pragma_graph::{FrameGraph, GraphError, Resources, TaskContext};
@@ -21,7 +21,7 @@
 //! fn physics(ctx: &TaskContext<'_>) -> Result<(), GraphError> {
 //!     let dt = ctx.read::<Input>()?.0;
 //!     let mut bodies = ctx.write::<Bodies>()?;
-//!     // Вложенный параллелизм внутри задачи графа.
+//!     // Nested parallelism inside a graph task.
 //!     ctx.pool().parallel_for(&mut bodies.0, Grain::Auto, |x| *x += dt)?;
 //!     Ok(())
 //! }
@@ -48,7 +48,7 @@
 //! graph.run(&pool, &mut resources)?;
 //! assert_eq!(resources.get::<Energy>().map(|e| e.0), Some(500.0));
 //!
-//! // Конфликт без порядка ловится при сборке.
+//! // An unordered conflict is caught at build time.
 //! let mut g = FrameGraph::builder();
 //! g.task("a", |t| t.writes::<Bodies>(), |_| ());
 //! g.task("b", |t| t.reads::<Bodies>(), |_| ());

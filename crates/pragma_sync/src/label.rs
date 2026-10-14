@@ -1,30 +1,30 @@
-//! Метки задач, исполняемых на потоке: «какая задача сейчас здесь работает» для panic hook
-//! и обработчиков падений (DECISIONS #28).
+//! Labels of the tasks running on a thread: "which task is running here right now" for the panic
+//! hook and crash handlers (DECISIONS #28).
 //!
-//! Метка — кадр на стеке [`run_labeled`]; поток хранит в TLS только указатель на самый
-//! внутренний кадр, кадр — указатель на внешний. Поставить и снять метку — две записи в TLS,
-//! прочитать — одна; аллокаций и копирования имени нет.
+//! A label is a frame on the stack of [`run_labeled`]; the thread keeps in TLS only a pointer to the
+//! innermost frame, and each frame points to the outer one. Setting and clearing a label are two TLS
+//! writes, reading is one; there are no allocations and no copies of the name.
 
 use std::cell::Cell;
 use std::fmt;
 use std::ptr;
 
-/// Кадр метки на стеке [`run_labeled`].
+/// A label frame on the stack of [`run_labeled`].
 struct Frame {
     kind: &'static str,
-    /// Имя, заимствованное у вызывающего [`run_labeled`] на время вызова.
+    /// The name, borrowed from the caller of [`run_labeled`] for the duration of the call.
     name: *const str,
-    /// Внешний кадр этого же потока (`null` — меток выше нет).
+    /// The outer frame of the same thread (`null`: no labels above).
     parent: *const Frame,
 }
 
 thread_local! {
-    /// Самый внутренний кадр текущего потока. Без деструктора, поэтому доступен в любой
-    /// момент жизни потока, в том числе из panic hook.
+    /// The innermost frame of the current thread. It has no destructor, so it is available at any
+    /// point of the thread's lifetime, including from the panic hook.
     static CURRENT: Cell<*const Frame> = const { Cell::new(ptr::null()) };
 }
 
-/// Возвращает внешний кадр на место и при раскрутке стека паникой.
+/// Restores the outer frame, also while the stack is unwinding from a panic.
 struct Restore(*const Frame);
 
 impl Drop for Restore {
@@ -33,11 +33,11 @@ impl Drop for Restore {
     }
 }
 
-/// Исполняет `f` с меткой задачи `kind`/`name` на текущем потоке.
+/// Runs `f` with the task label `kind`/`name` on the current thread.
 ///
-/// Пока `f` исполняется (и пока раскручивается её паника), [`current_label`] на этом потоке
-/// видит эту метку, а через [`TaskLabel::parent`] — метки внешних вызовов `run_labeled`.
-/// `kind` — категория (`"graph"`, `"spawn"`, `"async"`…), `name` — имя задачи.
+/// While `f` runs (and while its panic unwinds), [`current_label`] on this thread
+/// sees this label, and through [`TaskLabel::parent`] the labels of outer `run_labeled` calls.
+/// `kind` is the category (`"graph"`, `"spawn"`, `"async"`…), `name` is the task name.
 pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> R {
     let parent = CURRENT.try_with(Cell::get).unwrap_or(ptr::null());
     let frame = Frame {
@@ -55,10 +55,10 @@ pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> 
     f()
 }
 
-/// Передаёт `f` метку задачи, исполняемой сейчас на этом потоке (`None` — меток нет).
+/// Passes to `f` the label of the task currently running on this thread (`None`: no labels).
 ///
-/// Не аллоцирует и не блокирует — годится для panic hook. Метка заимствована только на
-/// время `f`: вынести её (или имя) наружу нельзя, скопируйте нужное.
+/// Neither allocates nor blocks, so it is fit for a panic hook. The label is borrowed only for
+/// the duration of `f`: it (or the name) cannot be moved out; copy what you need.
 ///
 /// ```
 /// use pragma_sync::__private::run_labeled;
@@ -78,46 +78,46 @@ pub fn run_labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> 
 /// ```
 pub fn current_label<R>(f: impl for<'a> FnOnce(Option<TaskLabel<'a>>) -> R) -> R {
     let frame = CURRENT.try_with(Cell::get).unwrap_or(ptr::null());
-    // SAFETY: `CURRENT` указывает либо в никуда, либо на `Frame` в стеке вызова `run_labeled`,
-    // который ещё не вернулся: кадр ставится перед `f` и снимается `Restore` после неё (и при
-    // раскрутке). Мы — внутри этого вызова на том же потоке, поэтому кадр жив всё время `f`,
-    // а `TaskLabel<'a>` не может пережить `f` (лайфтайм `'a` не выходит из замыкания) и не
-    // покидает поток (`!Send`, `!Sync` из-за сырых указателей `Frame`).
+    // SAFETY: `CURRENT` is either null or points to a `Frame` on the stack of a `run_labeled` call
+    // that has not returned yet: the frame is set before `f` and cleared by `Restore` after it (also
+    // during unwinding). We are inside that call on the same thread, so the frame is alive for the
+    // whole of `f`, and `TaskLabel<'a>` cannot outlive `f` (the lifetime `'a` does not escape the
+    // closure) nor leave the thread (`!Send`, `!Sync` because of the raw `Frame` pointers).
     let label = unsafe { frame.as_ref() }.map(|frame| TaskLabel { frame });
     f(label)
 }
 
-/// Метка задачи (см. [`current_label`]).
+/// A task label (see [`current_label`]).
 #[derive(Clone, Copy)]
 pub struct TaskLabel<'a> {
     frame: &'a Frame,
 }
 
 impl<'a> TaskLabel<'a> {
-    /// Категория задачи: `"graph"`, `"spawn"`, `"async"`….
+    /// The task category: `"graph"`, `"spawn"`, `"async"`….
     #[must_use]
     pub fn kind(&self) -> &'static str {
         self.frame.kind
     }
 
-    /// Имя задачи.
+    /// The task name.
     #[must_use]
     pub fn name(&self) -> &'a str {
-        // SAFETY: `name` заимствован вызовом `run_labeled`, который владеет кадром и ещё не
-        // вернулся (см. `current_label`), поэтому строка жива на всё время `'a`.
+        // SAFETY: `name` is borrowed by the `run_labeled` call that owns the frame and has not
+        // returned yet (see `current_label`), so the string is alive for the whole of `'a`.
         unsafe { &*self.frame.name }
     }
 
-    /// Метка внешнего вызова `run_labeled` на этом же потоке. С help-while-wait это не
-    /// обязательно логический родитель: ожидающая задача исполняет чужие задачи у себя на стеке.
+    /// The label of the outer `run_labeled` call on the same thread. With help-while-wait this is not
+    /// necessarily the logical parent: a waiting task runs other tasks on its own stack.
     #[must_use]
     pub fn parent(&self) -> Option<TaskLabel<'a>> {
-        // SAFETY: внешний кадр принадлежит вызову `run_labeled` ниже по стеку того же потока:
-        // он живёт дольше внутреннего, а значит, и всё время `'a`.
+        // SAFETY: the outer frame belongs to a `run_labeled` call further down the same thread's
+        // stack: it lives longer than the inner one, and hence for the whole of `'a`.
         unsafe { self.frame.parent.as_ref() }.map(|frame| TaskLabel { frame })
     }
 
-    /// Эта метка и все внешние, от внутренней к внешней.
+    /// This label and all outer ones, from the innermost to the outermost.
     pub fn chain(self) -> impl Iterator<Item = TaskLabel<'a>> {
         std::iter::successors(Some(self), TaskLabel::parent)
     }
@@ -132,7 +132,7 @@ impl fmt::Debug for TaskLabel<'_> {
     }
 }
 
-/// Цепочка меток от внутренней к внешней: ``graph `physics` <- spawn `bake` ``.
+/// The label chain from the innermost to the outermost: ``graph `physics` <- spawn `bake` ``.
 impl fmt::Display for TaskLabel<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, label) in self.chain().enumerate() {

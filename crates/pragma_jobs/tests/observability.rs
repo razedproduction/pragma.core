@@ -1,5 +1,5 @@
-//! Наблюдаемость пула (M4): метрики `PoolStats`, метки задач, платформенные настройки воркеров.
-// Тестовый код: паника = провал теста, переполнение исключено размерами входа.
+//! Pool observability (M4): `PoolStats` metrics, task labels, worker platform settings.
+// Test code: a panic is a test failure; overflow is ruled out by the input sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -20,7 +20,7 @@ fn pool(workers: usize) -> ThreadPool {
     ThreadPool::new(PoolConfig::default().with_workers(workers)).unwrap()
 }
 
-/// Цепочка меток текущего потока: `kind:name`, от внутренней к внешней.
+/// The current thread's label chain: `kind:name`, from the innermost to the outermost.
 fn chain() -> Vec<String> {
     current_task(|task| {
         task.map(|t| {
@@ -52,7 +52,7 @@ fn executed_sums_match_started_jobs() {
         pool.join(|| (), || ()).unwrap();
     }
     let after = pool.stats();
-    // 100 spawn + 50 задач области + 10 чанков + 20 вторых ветвей `join`.
+    // 100 spawns + 50 scope tasks + 10 chunks + 20 second `join` branches.
     assert_eq!(after.executed() - before.executed(), 180);
     let per_thread: u64 =
         after.workers().iter().map(|w| w.executed()).sum::<u64>() + after.external().executed();
@@ -64,7 +64,7 @@ fn executed_sums_match_started_jobs() {
 #[test]
 fn idle_workers_report_parking() {
     let pool = pool(2);
-    // Таймаут парковки — 50 мс: за это время каждый воркер хотя бы раз уснул и проснулся.
+    // The park timeout is 50 ms: by then every worker has fallen asleep and woken up at least once.
     std::thread::sleep(Duration::from_millis(150));
     for worker in pool.stats().workers() {
         assert!(worker.parks() >= 1, "{worker:?}");
@@ -90,7 +90,7 @@ fn snapshot_does_not_wait_for_busy_workers() {
         })
         .collect();
     started.wait();
-    // Оба воркера заняты: новые задачи лежат в глобальной очереди, снимок их видит.
+    // Both workers are busy: new tasks sit in the global queue, and the snapshot sees them.
     let queued: Vec<_> = (0..5)
         .map(|_| pool.spawn(Priority::Normal, || ()))
         .collect();
@@ -150,7 +150,7 @@ fn spawn_named_reports_name_in_errors() {
     assert_eq!(error.to_string(), "job `decompress` panicked: bad block");
 }
 
-/// Исполняет `f` именно на воркере: `JobHandle::join` помог бы и сам взял задачу из очереди.
+/// Runs `f` specifically on a worker: `JobHandle::join` would help and take the task from the queue itself.
 fn on_worker<T: Send + 'static>(pool: &ThreadPool, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     pool.spawner()

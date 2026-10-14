@@ -4,10 +4,10 @@ use std::marker::PhantomData;
 
 use crate::BaseError;
 
-/// Generational-хэндл: (индекс, поколение).
+/// A generational handle: (index, generation).
 ///
-/// После удаления значения поколение слота растёт, поэтому старый хэндл
-/// никогда не адресует новое значение в том же слоте.
+/// Removing a value bumps the slot's generation, so an old handle
+/// never addresses a new value in the same slot.
 pub struct Handle<T> {
     index: u32,
     generation: u32,
@@ -15,13 +15,13 @@ pub struct Handle<T> {
 }
 
 impl<T> Handle<T> {
-    /// Индекс слота.
+    /// Slot index.
     #[must_use]
     pub const fn index(self) -> u32 {
         self.index
     }
 
-    /// Поколение слота на момент выдачи хэндла.
+    /// Slot generation at the time the handle was issued.
     #[must_use]
     pub const fn generation(self) -> u32 {
         self.generation
@@ -35,7 +35,7 @@ impl<T> Handle<T> {
     }
 }
 
-// Ручные impl-ы: derive потребовал бы `T: Clone/Eq/...`, хотя `T` в хэндле не хранится.
+// Manual impls: derive would require `T: Clone/Eq/...` even though no `T` is stored in the handle.
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
@@ -65,7 +65,7 @@ struct Slot<T> {
     value: Option<T>,
 }
 
-/// Пул значений, адресуемых [`Handle`]. Освобождённые слоты переиспользуются.
+/// A pool of values addressed by [`Handle`]. Freed slots are reused.
 pub struct HandlePool<T> {
     slots: Vec<Slot<T>>,
     free: Vec<u32>,
@@ -79,7 +79,7 @@ impl<T> Default for HandlePool<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for HandlePool<T> {
-    /// Живые значения с их хэндлами.
+    /// Live values with their handles.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let live = self.slots.iter().zip(0_u32..).filter_map(|(slot, index)| {
             let handle = Handle::<T> {
@@ -94,7 +94,7 @@ impl<T: fmt::Debug> fmt::Debug for HandlePool<T> {
 }
 
 impl<T> HandlePool<T> {
-    /// Пустой пул.
+    /// An empty pool.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -104,23 +104,23 @@ impl<T> HandlePool<T> {
         }
     }
 
-    /// Число живых значений.
+    /// Number of live values.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.len
     }
 
-    /// Пул пуст.
+    /// Whether the pool is empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Кладёт значение и возвращает хэндл на него.
+    /// Stores a value and returns a handle to it.
     ///
-    /// Рост пула — через `try_reserve`: нехватка памяти — [`BaseError::OutOfMemory`], а не
-    /// `abort`. Вместе со слотом резервируется место в списке свободных, поэтому
-    /// [`remove`](Self::remove) никогда не выделяет память.
+    /// The pool grows via `try_reserve`: running out of memory is [`BaseError::OutOfMemory`], not
+    /// `abort`. Room in the free list is reserved together with the slot, so
+    /// [`remove`](Self::remove) never allocates.
     pub fn insert(&mut self, value: T) -> Result<Handle<T>, BaseError> {
         let index = match self.free.pop() {
             Some(index) => index,
@@ -129,7 +129,7 @@ impl<T> HandlePool<T> {
                 let index = u32::try_from(slots).map_err(|_| BaseError::CapacityExhausted)?;
                 let oom = |_| BaseError::OutOfMemory { slots };
                 self.slots.try_reserve(1).map_err(oom)?;
-                // `free.len() ≤ slots`, поэтому вычитание не переполняется.
+                // `free.len() ≤ slots`, so the subtraction cannot overflow.
                 let free_room = slots.saturating_add(1).saturating_sub(self.free.len());
                 self.free.try_reserve(free_room).map_err(oom)?;
                 self.slots.push(Slot {
@@ -150,7 +150,7 @@ impl<T> HandlePool<T> {
         })
     }
 
-    /// Значение по хэндлу или `None`, если хэндл устарел.
+    /// The value behind the handle, or `None` if the handle is stale.
     #[must_use]
     pub fn get(&self, handle: Handle<T>) -> Option<&T> {
         self.slots
@@ -159,7 +159,7 @@ impl<T> HandlePool<T> {
             .and_then(|s| s.value.as_ref())
     }
 
-    /// Изменяемая ссылка по хэндлу или `None`, если хэндл устарел.
+    /// A mutable reference behind the handle, or `None` if the handle is stale.
     #[must_use]
     pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
         self.slot_mut(handle.index)
@@ -167,15 +167,15 @@ impl<T> HandlePool<T> {
             .and_then(|s| s.value.as_mut())
     }
 
-    /// Удаляет значение; хэндл и все его копии становятся устаревшими.
+    /// Removes the value; the handle and all its copies become stale.
     pub fn remove(&mut self, handle: Handle<T>) -> Result<T, BaseError> {
         let slot = self
             .slot_mut(handle.index)
             .filter(|s| s.generation == handle.generation)
             .ok_or_else(|| handle.stale())?;
         let value = slot.value.take().ok_or_else(|| handle.stale())?;
-        // Слот с исчерпанным поколением выводится из оборота навсегда,
-        // чтобы поколение никогда не повторилось.
+        // A slot whose generation is exhausted is retired forever,
+        // so that a generation never repeats.
         match slot.generation.checked_add(1) {
             Some(next) => {
                 slot.generation = next;
@@ -212,7 +212,7 @@ mod tests {
     }
 
     proptest! {
-        /// Инвариант: живые хэндлы видят свои значения, удалённые — никогда.
+        /// Invariant: live handles see their values, removed ones never do.
         #[test]
         fn handles_never_alias(ops in proptest::collection::vec(any::<(bool, u8)>(), 0..256)) {
             let mut pool = HandlePool::new();

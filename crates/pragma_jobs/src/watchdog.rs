@@ -1,18 +1,18 @@
-//! Watchdog зависших задач — только debug-сборки (весь модуль под `cfg(debug_assertions)`).
+//! A watchdog for stuck tasks, debug builds only (the whole module is under `cfg(debug_assertions)`).
 //!
-//! У каждого потока пула (воркеры и внешние слоты) есть ячейка «какая задача с меткой
-//! исполняется и с какого момента». [`labeled`](crate::labeled) заполняет её на входе и
-//! восстанавливает внешнюю на выходе; поток watchdog раз в `period` просматривает ячейки и
-//! предупреждает об одной и той же задаче один раз. Ячейки не аллоцируют: имя копируется в
-//! буфер фиксированного размера, поэтому кадр графа и в debug остаётся без аллокаций.
+//! Every pool thread (workers and external slots) has a cell saying "which labeled task is
+//! running and since when". [`labeled`](crate::labeled) fills it on entry and
+//! restores the outer one on exit; the watchdog thread scans the cells every `period` and
+//! warns about any given task once. The cells do not allocate: the name is copied into a
+//! fixed-size buffer, so a graph frame stays allocation-free in debug too.
 
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Сколько байт имени задачи попадает в предупреждение.
+/// How many bytes of the task name make it into the warning.
 const NAME_CAP: usize = 64;
 
-/// Задача, исполняемая потоком сейчас.
+/// The task the thread is running right now.
 #[derive(Clone, Copy)]
 pub(crate) struct Active {
     kind: &'static str,
@@ -52,7 +52,7 @@ impl Active {
 pub(crate) struct Watchdog {
     threshold: Duration,
     slots: Box<[Mutex<Option<Active>>]>,
-    /// Имя потока для каждой ячейки.
+    /// The thread name for each cell.
     threads: Box<[String]>,
 }
 
@@ -65,13 +65,13 @@ impl Watchdog {
         }
     }
 
-    /// Как часто просматривать ячейки: задержка предупреждения — не больше четверти порога.
+    /// How often to scan the cells: the warning is delayed by at most a quarter of the threshold.
     pub(crate) fn period(&self) -> Duration {
         let quarter = self.threshold.checked_div(4).unwrap_or(self.threshold);
         quarter.clamp(Duration::from_millis(1), Duration::from_secs(1))
     }
 
-    /// Отмечает начало задачи на потоке `slot`; возвращает прежнее содержимое ячейки.
+    /// Marks the start of a task on thread `slot`; returns the previous contents of the cell.
     pub(crate) fn enter(&self, slot: usize, kind: &'static str, name: &str) -> Option<Active> {
         let cell = self.slots.get(slot)?;
         cell.lock()
@@ -79,14 +79,14 @@ impl Watchdog {
             .replace(Active::new(kind, name))
     }
 
-    /// Восстанавливает ячейку после задачи (внешнюю задачу — с её исходным временем начала).
+    /// Restores the cell after a task (the outer task keeps its original start time).
     pub(crate) fn exit(&self, slot: usize, previous: Option<Active>) {
         if let Some(cell) = self.slots.get(slot) {
             *cell.lock().unwrap_or_else(PoisonError::into_inner) = previous;
         }
     }
 
-    /// Предупреждает о задачах, исполняющихся дольше порога (каждой — один раз).
+    /// Warns about tasks running longer than the threshold (once per task).
     pub(crate) fn scan(&self) {
         for (cell, thread) in self.slots.iter().zip(self.threads.iter()) {
             let hung = {
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn long_names_are_truncated_on_char_boundary() {
-        let name = "ж".repeat(40); // 80 байт
+        let name = "\u{436}".repeat(40); // a 2-byte char: 80 bytes
         let active = Active::new("graph", &name);
         assert!(active.name().len() <= NAME_CAP);
         assert!(name.starts_with(active.name()));
