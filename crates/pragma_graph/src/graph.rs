@@ -114,7 +114,16 @@ impl FrameGraphBuilder {
     /// Проверяет описание и строит граф: дубли имён ([`GraphError::DuplicateTask`]),
     /// неизвестные зависимости ([`GraphError::UnknownDependency`]), циклы
     /// ([`GraphError::Cycle`]) и конфликты доступа без порядка ([`GraphError::AmbiguousOrder`]).
+    /// Граф больше [`MAX_TASKS`](crate::MAX_TASKS) задач или [`MAX_EDGES`](crate::MAX_EDGES)
+    /// рёбер, как и нехватка памяти при планировании, — [`GraphError::TooLarge`].
     pub fn build(self) -> Result<FrameGraph, GraphError> {
+        // До любых выделений по числу задач (reliability §1).
+        if self.tasks.len() > plan::MAX_TASKS {
+            return Err(GraphError::TooLarge {
+                tasks: self.tasks.len(),
+                reason: plan::TOO_MANY_TASKS,
+            });
+        }
         let specs: Vec<TaskSpec<'_>> = self
             .tasks
             .iter()

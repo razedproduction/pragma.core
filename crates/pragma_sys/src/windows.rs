@@ -12,6 +12,9 @@ use crate::{SysError, ThreadPriority};
 /// `GetThreadPriority` при ошибке (`MAXLONG`); в `windows-sys` константы нет.
 const THREAD_PRIORITY_ERROR_RETURN: i32 = i32::MAX;
 
+/// Наибольшая длина имени потока в единицах UTF-16 (без завершающего нуля).
+const MAX_NAME: usize = 256;
+
 /// `SetThreadAffinityMask` адресует ядра одной группы процессоров маской `usize`.
 const MAX_CORES: usize = usize::BITS as usize;
 
@@ -25,7 +28,17 @@ fn last_error(op: &'static str) -> SysError {
 }
 
 pub(crate) fn set_current_thread_name(name: &str) -> Result<(), SysError> {
-    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // Копия под FFI не растёт со входом (reliability §1): длинное имя обрезается по символу.
+    let mut wide: Vec<u16> = Vec::with_capacity(MAX_NAME.saturating_add(1));
+    for c in name.chars() {
+        let mut buf = [0_u16; 2];
+        let units = c.encode_utf16(&mut buf);
+        if wide.len().saturating_add(units.len()) > MAX_NAME {
+            break;
+        }
+        wide.extend_from_slice(units);
+    }
+    wide.push(0);
     // SAFETY: `GetCurrentThread` возвращает псевдохэндл текущего потока (закрывать не нужно);
     // `wide` — строка UTF-16 с завершающим нулём, живёт до конца вызова и не изменяется.
     let hr = unsafe { SetThreadDescription(GetCurrentThread(), wide.as_ptr()) };

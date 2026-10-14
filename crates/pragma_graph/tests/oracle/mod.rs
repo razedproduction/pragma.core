@@ -285,6 +285,39 @@ fn expected(spec: &Spec) -> Expected {
     }
 }
 
+/// Большой граф (M5): `selector` выбирает форму, исход предсказуем без квадратичного оракула.
+/// - больше [`pragma_graph::MAX_TASKS`] задач → `TooLarge` до любой квадратичной работы;
+/// - ровно на пределе или чуть ниже, без рёбер → граф строится в порядке регистрации;
+/// - режим `ordered`, все пишут один ресурс, пар больше [`pragma_graph::MAX_EDGES`] → `TooLarge`.
+pub fn check_large(selector: u8) {
+    let extra = usize::from(selector);
+    let (n, ordered) = match selector % 3 {
+        0 => (pragma_graph::MAX_TASKS + 1 + extra, false),
+        1 => (pragma_graph::MAX_TASKS - extra % 8, false),
+        _ => (2_900 + extra * 4, true),
+    };
+    let mut g = if ordered {
+        FrameGraph::builder().ordered()
+    } else {
+        FrameGraph::builder()
+    };
+    for i in 0..n {
+        g.task(
+            format!("t{i}"),
+            |t| if ordered { t.writes::<R<0>>() } else { t },
+            |_| (),
+        );
+    }
+    match (selector % 3, g.build()) {
+        (1, Ok(graph)) => {
+            assert_eq!(graph.len(), n);
+            assert_eq!(graph.edges().count(), 0);
+        }
+        (0 | 2, Err(GraphError::TooLarge { tasks, .. })) => assert_eq!(tasks, n),
+        (shape, other) => panic!("large graph shape {shape}, n={n}: got {other:?}"),
+    }
+}
+
 /// Строит граф по описанию и сверяет с оракулом. С `pool` — ещё и исполняет `frames` кадров.
 pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
     let n = spec.tasks.len();

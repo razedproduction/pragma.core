@@ -7,6 +7,22 @@ use std::collections::{BinaryHeap, HashMap};
 use crate::GraphError;
 use crate::resources::ResourceKey;
 
+/// Наибольшее число задач в графе. Достижимость при сборке — битовая матрица `n × n`
+/// (`n²/8` байт): на пределе это 32 МиБ, а не гигабайты на случайно большом входе.
+pub const MAX_TASKS: usize = 16_384;
+
+/// Наибольшее число рёбер до транзитивной редукции: явные `before`/`after` и рёбра режима
+/// `ordered` (если все задачи пишут один ресурс, их `n²/2`). На пределе — 32 МиБ индексов.
+pub const MAX_EDGES: usize = 1 << 22;
+
+pub(crate) const TOO_MANY_TASKS: &str = "more tasks than pragma_graph::MAX_TASKS";
+const TOO_MANY_EDGES: &str = "more edges than pragma_graph::MAX_EDGES";
+const OUT_OF_MEMORY: &str = "out of memory while planning";
+
+fn too_large(tasks: usize, reason: &'static str) -> GraphError {
+    GraphError::TooLarge { tasks, reason }
+}
+
 /// Объявленный доступ задачи к ресурсу.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Access {
@@ -39,12 +55,42 @@ pub(crate) struct Plan {
     pub(crate) successors: Vec<Vec<usize>>,
 }
 
-/// Порядок проверок (и приоритет ошибок): дубли имён → неизвестные зависимости → циклы явных
-/// рёбер → неявные конфликты (в режиме `ordered` — циклы после добавления рёбер по порядку
-/// объявления).
+/// Счётчик рёбер под [`MAX_EDGES`]; рост списков — через `try_reserve`.
+struct EdgeBudget {
+    tasks: usize,
+    edges: usize,
+}
+
+impl EdgeBudget {
+    fn push(&mut self, succ: &mut [Vec<usize>], from: usize, to: usize) -> Result<(), GraphError> {
+        if self.edges >= MAX_EDGES {
+            return Err(too_large(self.tasks, TOO_MANY_EDGES));
+        }
+        if let Some(list) = succ.get_mut(from) {
+            list.try_reserve(1)
+                .map_err(|_| too_large(self.tasks, OUT_OF_MEMORY))?;
+            list.push(to);
+            self.edges = self.edges.saturating_add(1);
+        }
+        Ok(())
+    }
+}
+
+/// Порядок проверок (и приоритет ошибок): размер ([`MAX_TASKS`]) → дубли имён → неизвестные
+/// зависимости → циклы явных рёбер → неявные конфликты (в режиме `ordered` — циклы после
+/// добавления рёбер по порядку объявления). Память, которая растёт со входом быстрее, чем
+/// линейно (рёбра, матрица достижимости), выделяется через `try_reserve`: нехватка —
+/// [`GraphError::TooLarge`], а не `abort`.
 pub(crate) fn plan(tasks: &[TaskSpec<'_>], ordered: bool) -> Result<Plan, GraphError> {
     let n = tasks.len();
-    let mut index: HashMap<&str, usize> = HashMap::with_capacity(n);
+    if n > MAX_TASKS {
+        return Err(too_large(n, TOO_MANY_TASKS));
+    }
+    let mut budget = EdgeBudget { tasks: n, edges: 0 };
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    index
+        .try_reserve(n)
+        .map_err(|_| too_large(n, OUT_OF_MEMORY))?;
     for (i, task) in tasks.iter().enumerate() {
         if index.insert(task.name, i).is_some() {
             return Err(GraphError::DuplicateTask {
@@ -67,15 +113,13 @@ pub(crate) fn plan(tasks: &[TaskSpec<'_>], ordered: bool) -> Result<Plan, GraphE
                 });
             };
             let (from, to) = if before { (i, j) } else { (j, i) };
-            if let Some(list) = succ.get_mut(from) {
-                list.push(to);
-            }
+            budget.push(&mut succ, from, to)?;
         }
     }
     normalize(&mut succ);
 
     let mut order = topo(&succ).map_err(|cycle| cycle_error(tasks, &cycle))?;
-    let mut reach = closure(&order, &succ);
+    let mut reach = closure(&order, &succ)?;
 
     // Конфликтующие пары проверяются по явному порядку; в режиме `ordered` неупорядоченная
     // пара получает ребро от объявленной раньше к объявленной позже.
@@ -95,16 +139,14 @@ pub(crate) fn plan(tasks: &[TaskSpec<'_>], ordered: bool) -> Result<Plan, GraphE
                     resource: resource.to_owned(),
                 });
             }
-            if let Some(list) = succ.get_mut(i) {
-                list.push(j);
-                added = true;
-            }
+            budget.push(&mut succ, i, j)?;
+            added = true;
         }
     }
     if added {
         normalize(&mut succ);
         order = topo(&succ).map_err(|cycle| cycle_error(tasks, &cycle))?;
-        reach = closure(&order, &succ);
+        reach = closure(&order, &succ)?;
     }
 
     let successors = reduce(&succ, &reach);
@@ -229,8 +271,13 @@ fn bit(i: usize) -> u64 {
 }
 
 impl BitSet {
-    fn new(n: usize) -> Self {
-        Self(vec![0; n.div_ceil(64)])
+    /// Пустое множество на `n` вершин; память — через `try_reserve`.
+    fn try_new(n: usize) -> Option<Self> {
+        let words = n.div_ceil(64);
+        let mut bits = Vec::new();
+        bits.try_reserve_exact(words).ok()?;
+        bits.resize(words, 0);
+        Some(Self(bits))
     }
 
     fn insert(&mut self, i: usize) {
@@ -250,12 +297,17 @@ impl BitSet {
     }
 }
 
-/// Достижимость: `reach[u]` — все вершины, до которых есть путь из `u`.
-fn closure(order: &[usize], succ: &[Vec<usize>]) -> Vec<BitSet> {
+/// Достижимость: `reach[u]` — все вершины, до которых есть путь из `u`. Матрица `n × n` бит —
+/// самое большое выделение сборки, поэтому оно fallible.
+fn closure(order: &[usize], succ: &[Vec<usize>]) -> Result<Vec<BitSet>, GraphError> {
     let n = succ.len();
-    let mut reach = vec![BitSet::new(n); n];
+    let oom = || too_large(n, OUT_OF_MEMORY);
+    let mut reach: Vec<BitSet> = Vec::new();
+    reach.try_reserve_exact(n).map_err(|_| oom())?;
+    // Пустые множества без выделения; каждое заполняется ровно один раз ниже.
+    reach.resize_with(n, || BitSet(Vec::new()));
     for &u in order.iter().rev() {
-        let mut acc = BitSet::new(n);
+        let mut acc = BitSet::try_new(n).ok_or_else(oom)?;
         for &v in succ.get(u).map_or(&[][..], Vec::as_slice) {
             acc.insert(v);
             if let Some(r) = reach.get(v) {
@@ -266,7 +318,7 @@ fn closure(order: &[usize], succ: &[Vec<usize>]) -> Vec<BitSet> {
             *r = acc;
         }
     }
-    reach
+    Ok(reach)
 }
 
 fn reaches(reach: &[BitSet], from: usize, to: usize) -> bool {
@@ -419,6 +471,44 @@ mod tests {
         let p = plan(&tasks, true).unwrap();
         assert_eq!(p.order, vec![1, 0]);
         assert_eq!(p.successors, vec![vec![], vec![0]]);
+    }
+
+    fn names(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("t{i}")).collect()
+    }
+
+    #[test]
+    fn task_limit_is_an_error_before_any_quadratic_work() {
+        let names = names(MAX_TASKS + 1);
+        let tasks: Vec<_> = names.iter().map(|n| spec(n, &[], &[])).collect();
+        assert_eq!(
+            plan(&tasks, false),
+            Err(GraphError::TooLarge {
+                tasks: MAX_TASKS + 1,
+                reason: TOO_MANY_TASKS
+            })
+        );
+        // Ровно на пределе граф строится (матрица — 32 МиБ).
+        assert_eq!(
+            plan(&tasks[..MAX_TASKS], false).unwrap().order.len(),
+            MAX_TASKS
+        );
+    }
+
+    #[test]
+    fn ordered_edges_are_capped() {
+        // Все пишут один ресурс: режим `ordered` добавил бы n²/2 рёбер.
+        let w = [write::<A>()];
+        let n = 3_000; // 4.5M пар > MAX_EDGES
+        let names = names(n);
+        let tasks: Vec<_> = names.iter().map(|name| spec(name, &w, &[])).collect();
+        assert_eq!(
+            plan(&tasks, true),
+            Err(GraphError::TooLarge {
+                tasks: n,
+                reason: TOO_MANY_EDGES
+            })
+        );
     }
 
     #[test]

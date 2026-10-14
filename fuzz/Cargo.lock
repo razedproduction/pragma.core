@@ -181,7 +181,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pragma_base"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "pragma_graph"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "pragma_base",
  "pragma_jobs",
@@ -208,21 +208,31 @@ dependencies = [
 
 [[package]]
 name = "pragma_jobs"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "crossbeam-deque",
  "pragma_base",
  "pragma_sync",
+ "pragma_sys",
  "thiserror",
 ]
 
 [[package]]
 name = "pragma_sync"
-version = "0.0.1"
+version = "0.5.0"
 dependencies = [
  "crossbeam-utils",
  "loom",
  "thiserror",
+]
+
+[[package]]
+name = "pragma_sys"
+version = "0.5.0"
+dependencies = [
+ "libc",
+ "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

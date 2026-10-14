@@ -42,6 +42,16 @@ proptest! {
     }
 }
 
+proptest! {
+    // Каждый случай строит тысячи задач: немного случаев, все три формы встречаются.
+    #![proptest_config(ProptestConfig::with_cases(12))]
+
+    #[test]
+    fn large_graphs_are_too_large_not_abort(selector in any::<u8>()) {
+        oracle::check_large(selector);
+    }
+}
+
 #[test]
 fn decoder_covers_every_outcome() {
     // Сами по себе случайные байты почти всегда дают ошибку; убеждаемся, что декодер

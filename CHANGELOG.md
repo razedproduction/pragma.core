@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-14
+
+Первая версия с номером: до неё все крейты были 0.0.1, хотя вехи M1–M4 назывались 0.1–0.4
+(DECISIONS #33). Ниже — всё, что вошло в M1–M5.
+
+### Added — M5b «Память и `unsafe`»
+- `GraphError::TooLarge { tasks, reason }`, `pragma_graph::MAX_TASKS` (16 384) и `MAX_EDGES` (2²²):
+  `build()` больше не выделяет n²/8 байт на любом входе; матрица достижимости и рёбра —
+  через `try_reserve` (DECISIONS #37).
+- `BaseError::OutOfMemory { slots }`: `HandlePool::insert` растёт через `try_reserve`, а `remove`
+  не выделяет память.
+- Тест `pragma_base/tests/oom.rs` с отказывающим глобальным аллокатором; proptest и fuzz-кейс
+  (префикс `0xFE`) на большие графы.
+- `pragma_jobs/tests/miri.rs` — пул из 1 воркера под Miri (Tree Borrows) в CI (DECISIONS #38).
+- `docs/unsafe.md` — ревью всех 52 вхождений `unsafe`.
+
+### Changed — M5b
+- Версия всех крейтов — 0.5.0.
+- `pragma_sys::set_current_thread_name` на Windows обрезает имя до 256 единиц UTF-16.
+- Правило reliability §1: выделение, размер которого задаёт вход, — только через `try_reserve`
+  или под лимитом.
+
 ### Added — M5a «Гарантии в CI»
 - Обязательный набор детерминизма: `frame_sim --suite` (5 сценариев × 1/2/N воркеров ×
   мгновенная/запаздывающая загрузка + `idle_spin` 0/128, снимки `PoolStats`, watchdog, подписчик

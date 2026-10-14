@@ -102,12 +102,21 @@ impl<T> HandlePool<T> {
     }
 
     /// Кладёт значение и возвращает хэндл на него.
+    ///
+    /// Рост пула — через `try_reserve`: нехватка памяти — [`BaseError::OutOfMemory`], а не
+    /// `abort`. Вместе со слотом резервируется место в списке свободных, поэтому
+    /// [`remove`](Self::remove) никогда не выделяет память.
     pub fn insert(&mut self, value: T) -> Result<Handle<T>, BaseError> {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                let index =
-                    u32::try_from(self.slots.len()).map_err(|_| BaseError::CapacityExhausted)?;
+                let slots = self.slots.len();
+                let index = u32::try_from(slots).map_err(|_| BaseError::CapacityExhausted)?;
+                let oom = |_| BaseError::OutOfMemory { slots };
+                self.slots.try_reserve(1).map_err(oom)?;
+                // `free.len() ≤ slots`, поэтому вычитание не переполняется.
+                let free_room = slots.saturating_add(1).saturating_sub(self.free.len());
+                self.free.try_reserve(free_room).map_err(oom)?;
                 self.slots.push(Slot {
                     generation: 0,
                     value: None,

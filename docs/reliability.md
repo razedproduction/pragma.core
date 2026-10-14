@@ -15,6 +15,14 @@
   `checked_*`/`saturating_*`/`wrapping_*` осознанно.
 - Отравленный мьютекс — не повод паниковать: `unwrap_or_else(PoisonError::into_inner)`, если
   защищаемые данные остаются согласованными.
+- **Выделение, размер которого задаёт вход, — только через `try_reserve` или под лимитом**
+  (DECISIONS #37). Нехватка памяти — ошибка с контекстом, а не `abort` в `handle_alloc_error`.
+  Сейчас: граф — `MAX_TASKS` / `MAX_EDGES` + `try_reserve` → `GraphError::TooLarge`;
+  `HandlePool` — `try_reserve` → `BaseError::OutOfMemory`; blocking-очередь — `blocking_capacity`
+  → `Overloaded`; число воркеров ≤ 512, по нему — `PoolStats` и ячейки watchdog; имя потока
+  для FFI — не длиннее 256 UTF-16 (Windows) / 15 байт (Linux). Выделения фиксированного
+  размера на вызов (`Box` задачи в `spawn`) правилом не считаются: очередь растёт по
+  решению вызывающего, как у `std::sync::mpsc`.
 
 ## 2. Ошибки
 
@@ -31,7 +39,10 @@
   Miri их не исполняет, крейт проверяется тестами на Windows и Linux в CI.
 - В `pragma_sync`: `#![deny(unsafe_op_in_unsafe_fn)]`, `clippy::undocumented_unsafe_blocks = deny`,
   комментарий `// SAFETY:` на каждый блок с объяснением, почему инвариант выполняется.
-- Тесты `pragma_sync` гоняются под Miri (`cargo +nightly miri test -p pragma_sync`).
+- Тесты `pragma_sync` гоняются под Miri (`cargo +nightly miri test -p pragma_sync`), а набор
+  `pragma_jobs/tests/miri.rs` (пул из 1 воркера) — под Miri с Tree Borrows (DECISIONS #38).
+  Ревью каждого вхождения `unsafe` (инвариант → кто гарантирует → чем проверено) —
+  [unsafe.md](unsafe.md).
 - Каждый атомарный протокол (парковка, латчи, счётчики графа, латч `join_on_stack`) получает loom-модель:
   `RUSTFLAGS="--cfg loom" cargo test -p pragma_sync --release --lib --tests` (модели — в
   `crates/pragma_sync/tests/loom.rs`). loom моделирует `SeqCst` как `AcqRel`, поэтому протоколы
@@ -59,6 +70,8 @@
 | `wait()` async-хэндла из воркера или кадра графа | `AsyncError::WouldBlock` вместо дедлока (DECISIONS #25) |
 | Зависание задачи | Watchdog в debug-сборках: одно предупреждение `pragma_jobs::watchdog` с именем задачи и потока (`PoolConfig::with_watchdog`, 5 с); в release кода нет |
 | ОС отказала в приоритете или привязке потока | Предупреждение в лог, воркер работает без настройки (`SysError` из `pragma_sys`) |
+| Граф слишком велик (больше `MAX_TASKS` задач или `MAX_EDGES` рёбер) или память под план не выделилась | `GraphError::TooLarge { tasks, reason }` из `build()`, а не `abort` (тест, proptest, fuzz) |
+| Аллокатор отказал при росте `HandlePool` | `BaseError::OutOfMemory { slots }`, пул цел; `remove` не выделяет память (`tests/oom.rs`) |
 
 ### Что ядро не гарантирует
 
@@ -70,7 +83,7 @@
 | Паника при `panic = "abort"` в профиле приложения | `catch_unwind` не работает, процесс завершается (DECISIONS #9) |
 | Паника во время ожидания в `scope`/`join` | Намеренный `abort`: иначе заимствованные задачами данные стали бы висячими (DECISIONS #15) |
 | Переполнение стека | Rust завершает процесс, перехват невозможен |
-| Нехватка памяти | Стандартный аллокатор вызывает `handle_alloc_error` → `abort` |
+| Нехватка памяти вне ограниченных выделений (§1) | Стандартный аллокатор вызывает `handle_alloc_error` → `abort`; выделения по входу ядро делает через `try_reserve`/лимиты |
 | Ошибка доступа к памяти, сигнал ОС | Вне модели Rust; при отсутствии `unsafe`-багов в `pragma_sync` не возникает |
 
 Что ядро даёт приложению для этих случаев: контекст текущей задачи на потоке —
@@ -113,7 +126,7 @@
 5. MSRV 1.88
 6. `cargo deny check`: лицензии, advisories, запрещённые C-крейты
 7. `tools/audit_workspace.py`: чистота, слои и бюджет `unsafe` (в PR — против базовой ревизии)
-8. Miri и loom для `pragma_sync`
+8. Miri и loom для `pragma_sync`; Miri для `pragma_jobs/tests/miri.rs` (Tree Borrows)
 9. `cargo hack clippy --each-feature`: каждая фича фасада собирается отдельно
 10. Fuzz построителя графа, 60 с (`cargo +nightly fuzz run graph_build`, Linux)
 11. Набор детерминизма: `cargo run -p frame_sim --release -- --suite --ticks 200` (Windows + Linux;

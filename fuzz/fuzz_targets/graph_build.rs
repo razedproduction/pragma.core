@@ -19,5 +19,10 @@ fn pool() -> &'static ThreadPool {
 }
 
 fuzz_target!(|data: &[u8]| {
+    // Префикс 0xFE — большой граф (лимиты MAX_TASKS / MAX_EDGES → TooLarge, а не abort).
+    if let [0xFE, selector, ..] = data {
+        oracle::check_large(*selector);
+        return;
+    }
     oracle::check(&oracle::Spec::from_bytes(data), Some(pool()), 2);
 });

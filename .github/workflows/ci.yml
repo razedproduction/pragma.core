@@ -156,7 +156,7 @@ jobs:
           python tools/bench_gate.py --base ../bench-base --head . --rounds 3 --summary "$GITHUB_STEP_SUMMARY"
 
   miri:
-    name: Miri (pragma_sync)
+    name: Miri (pragma_sync, pragma_jobs)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -165,6 +165,13 @@ jobs:
       - run: cargo +nightly miri test -p pragma_sync
         env:
           RUSTFLAGS: ""
+      # Пул из 1 воркера поверх всего unsafe pragma_sync (DECISIONS #38): Tree Borrows —
+      # crossbeam-epoch нарушает экспериментальные Stacked Borrows; утечки — его глобальный
+      # сборщик (static, освобождает мешки лениво), не память пула.
+      - run: cargo +nightly miri test -p pragma_jobs --test miri
+        env:
+          RUSTFLAGS: ""
+          MIRIFLAGS: -Zmiri-tree-borrows -Zmiri-ignore-leaks
 
   loom:
     name: loom (pragma_sync)
