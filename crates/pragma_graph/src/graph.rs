@@ -2,9 +2,8 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use pragma_base::tracing;
 use pragma_jobs::{Priority, ThreadPool};
-use pragma_sync::ArrivalCounter;
+use pragma_sync::__private::ArrivalCounter;
 
 use crate::GraphError;
 use crate::context::{TaskContext, TaskResult};

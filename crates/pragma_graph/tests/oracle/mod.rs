@@ -361,14 +361,21 @@ pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
     let index = |name: &str| names.iter().position(|n| *n == name).unwrap();
     let (order, reach, mut graph) = match (expected(spec), built) {
         (Expected::Duplicate(task), Err(err)) => {
-            assert_eq!(err, GraphError::DuplicateTask { task });
+            assert!(
+                matches!(&err, GraphError::DuplicateTask { task: t, .. } if *t == task),
+                "{err:?}"
+            );
             return;
         }
         (Expected::Unknown { task, missing }, Err(err)) => {
-            assert_eq!(err, GraphError::UnknownDependency { task, missing });
+            assert!(
+                matches!(&err, GraphError::UnknownDependency { task: t, missing: m, .. }
+                    if *t == task && *m == missing),
+                "{err:?}"
+            );
             return;
         }
-        (Expected::Cycle(edges), Err(GraphError::Cycle { tasks })) => {
+        (Expected::Cycle(edges), Err(GraphError::Cycle { tasks, .. })) => {
             assert!(!tasks.is_empty());
             for (k, from) in tasks.iter().enumerate() {
                 let to = &tasks[(k + 1) % tasks.len()];
@@ -380,13 +387,10 @@ pub fn check(spec: &Spec, pool: Option<&ThreadPool>, frames: usize) {
             return;
         }
         (Expected::Ambiguous { a, b, resource }, Err(err)) => {
-            assert_eq!(
-                err,
-                GraphError::AmbiguousOrder {
-                    a,
-                    b,
-                    resource: resource.into()
-                }
+            assert!(
+                matches!(&err, GraphError::AmbiguousOrder { a: x, b: y, resource: r, .. }
+                    if *x == a && *y == b && r == resource),
+                "{err:?}"
             );
             return;
         }

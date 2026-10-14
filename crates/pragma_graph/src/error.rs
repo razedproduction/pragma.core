@@ -13,12 +13,14 @@ use pragma_jobs::JobError;
 pub enum GraphError {
     /// В графе есть цикл зависимостей.
     #[error("dependency cycle: {}", tasks.join(" -> "))]
+    #[non_exhaustive]
     Cycle {
         /// Задачи, образующие цикл, в порядке рёбер (от последней ребро ведёт к первой).
         tasks: Vec<String>,
     },
     /// Две задачи пишут (или пишут/читают) один ресурс без явного порядка.
     #[error("tasks `{a}` and `{b}` conflict on resource `{resource}` without explicit ordering")]
+    #[non_exhaustive]
     AmbiguousOrder {
         /// Первая задача (в порядке регистрации).
         a: String,
@@ -29,6 +31,7 @@ pub enum GraphError {
     },
     /// Зависимость на незарегистрированную задачу.
     #[error("task `{task}` depends on unknown task `{missing}`")]
+    #[non_exhaustive]
     UnknownDependency {
         /// Задача с зависимостью.
         task: String,
@@ -37,6 +40,7 @@ pub enum GraphError {
     },
     /// Имя задачи зарегистрировано дважды.
     #[error("task `{task}` is registered twice")]
+    #[non_exhaustive]
     DuplicateTask {
         /// Повторяющееся имя.
         task: String,
@@ -45,6 +49,7 @@ pub enum GraphError {
     /// [`MAX_EDGES`](crate::MAX_EDGES)) или память для плана не выделилась — вместо `abort`
     /// на большом входе.
     #[error("frame graph with {tasks} tasks is too large: {reason}")]
+    #[non_exhaustive]
     TooLarge {
         /// Число задач в описании.
         tasks: usize,
@@ -53,6 +58,7 @@ pub enum GraphError {
     },
     /// Задача объявила ресурс, которого нет в [`Resources`](crate::Resources).
     #[error("task `{task}` needs resource `{resource}`, which is missing")]
+    #[non_exhaustive]
     MissingResource {
         /// Первая задача, объявившая ресурс.
         task: String,
@@ -61,6 +67,7 @@ pub enum GraphError {
     },
     /// Задача обратилась к ресурсу, не объявив такой доступ.
     #[error("task `{task}` accessed `{resource}` for {access} without declaring it")]
+    #[non_exhaustive]
     UndeclaredAccess {
         /// Задача.
         task: String,
@@ -71,6 +78,7 @@ pub enum GraphError {
     },
     /// Ресурс уже заимствован (например, задача дважды взяла его на запись).
     #[error("task `{task}`: resource `{resource}` is already borrowed")]
+    #[non_exhaustive]
     BorrowConflict {
         /// Задача.
         task: String,
@@ -79,6 +87,7 @@ pub enum GraphError {
     },
     /// Задача вернула ошибку.
     #[error("task `{task}` failed: {message}")]
+    #[non_exhaustive]
     TaskFailed {
         /// Задача.
         task: String,
@@ -87,6 +96,7 @@ pub enum GraphError {
     },
     /// Задача запаниковала; паника перехвачена, зависимые задачи этого кадра не запускались.
     #[error("task `{task}` panicked: {message}")]
+    #[non_exhaustive]
     TaskPanicked {
         /// Задача.
         task: String,

@@ -19,6 +19,17 @@
 //! кадр размечает приложение (`puffin::GlobalProfiler::lock().new_frame()`), запись включает
 //! `puffin::set_scopes_on(true)`.
 //!
+//! ## Гарантии semver
+//!
+//! Публичный API всех модулей следует semver, кроме:
+//! - feature `puffin` и re-export [`puffin`](https://docs.rs/puffin): версия puffin
+//!   поднимается в минорном релизе (puffin ещё не 1.0);
+//! - скрытых из документации элементов (`#[doc(hidden)]`, например `pragma_sync::__private`) —
+//!   это внутренности для крейтов самого ядра.
+//!
+//! Логи ядро пишет через `tracing` 0.1: подписчика ставит приложение своей зависимостью
+//! `tracing`.
+//!
 //! ```
 //! use pragma_core::prelude::*;
 //!
@@ -30,7 +41,11 @@
 #![forbid(unsafe_code)]
 
 pub use pragma_base as base;
-pub use pragma_sync as sync;
+
+/// Примитивы синхронизации (стабильная часть `pragma_sync`).
+pub mod sync {
+    pub use pragma_sync::{AtomicCounter, CountLatch, SyncError, TaskLabel, current_label};
+}
 
 #[cfg(feature = "jobs")]
 pub use pragma_jobs as jobs;

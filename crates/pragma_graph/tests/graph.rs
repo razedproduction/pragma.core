@@ -178,41 +178,38 @@ fn build_errors() {
     let mut g = FrameGraph::builder();
     g.task("a", |t| t.writes::<Input>(), |_| ());
     g.task("b", |t| t.writes::<Input>(), |_| ());
-    assert_eq!(
-        g.build().unwrap_err(),
-        GraphError::AmbiguousOrder {
-            a: "a".into(),
-            b: "b".into(),
-            resource: std::any::type_name::<Input>().into(),
-        }
+    let err = g.build().unwrap_err();
+    assert!(
+        matches!(&err, GraphError::AmbiguousOrder { a, b, resource, .. }
+            if a == "a" && b == "b" && resource == std::any::type_name::<Input>()),
+        "{err:?}"
     );
 
     let mut g = FrameGraph::builder();
     g.task("a", |t| t.after("b"), |_| ());
     g.task("b", |t| t.after("a"), |_| ());
-    assert_eq!(
-        g.build().unwrap_err(),
-        GraphError::Cycle {
-            tasks: vec!["a".into(), "b".into()]
-        }
+    let err = g.build().unwrap_err();
+    assert!(
+        matches!(&err, GraphError::Cycle { tasks, .. } if tasks == &["a", "b"]),
+        "{err:?}"
     );
 
     let mut g = FrameGraph::builder();
     g.task("a", |t| t.before("ghost"), |_| ());
-    assert_eq!(
-        g.build().unwrap_err(),
-        GraphError::UnknownDependency {
-            task: "a".into(),
-            missing: "ghost".into()
-        }
+    let err = g.build().unwrap_err();
+    assert!(
+        matches!(&err, GraphError::UnknownDependency { task, missing, .. }
+            if task == "a" && missing == "ghost"),
+        "{err:?}"
     );
 
     let mut g = FrameGraph::builder();
     g.task("a", |t| t, |_| ());
     g.task("a", |t| t, |_| ());
-    assert_eq!(
-        g.build().unwrap_err(),
-        GraphError::DuplicateTask { task: "a".into() }
+    let err = g.build().unwrap_err();
+    assert!(
+        matches!(&err, GraphError::DuplicateTask { task, .. } if task == "a"),
+        "{err:?}"
     );
 }
 
@@ -231,12 +228,10 @@ fn missing_resource_is_reported_before_the_frame() {
     g.task("needs", |t| t.reads::<Audio>(), |_| ());
     let mut graph = g.build().unwrap();
     let err = graph.run(&pool(1), &mut Resources::new()).unwrap_err();
-    assert_eq!(
-        err,
-        GraphError::MissingResource {
-            task: "needs".into(),
-            resource: std::any::type_name::<Audio>().into()
-        }
+    assert!(
+        matches!(&err, GraphError::MissingResource { task, resource, .. }
+            if task == "needs" && resource == std::any::type_name::<Audio>()),
+        "{err:?}"
     );
     assert_eq!(ran.load(Ordering::SeqCst), 0, "no task runs");
 }
@@ -267,13 +262,10 @@ fn undeclared_and_double_borrows_are_errors() {
     res.insert(Audio(0));
     // РћС€РёР±РєР° Р·Р°РґР°С‡Рё СЃ РЅР°РёРјРµРЅСЊС€РёРј РёРЅРґРµРєСЃРѕРј СЂРµРіРёСЃС‚СЂР°С†РёРё.
     let err = graph.run(&pool(2), &mut res).unwrap_err();
-    assert_eq!(
-        err,
-        GraphError::UndeclaredAccess {
-            task: "sneaky".into(),
-            resource: std::any::type_name::<Input>().into(),
-            access: "write"
-        }
+    assert!(
+        matches!(&err, GraphError::UndeclaredAccess { task, resource, access: "write", .. }
+            if task == "sneaky" && resource == std::any::type_name::<Input>()),
+        "{err:?}"
     );
     assert_eq!(res.get::<Input>().unwrap().0, 0);
 
@@ -330,12 +322,10 @@ fn failure_skips_dependents_but_not_independent_tasks() {
             log.lock().unwrap().clear();
             let err = graph.run(&pool, &mut res).unwrap_err();
             // `boom` Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅР° СЂР°РЅСЊС€Рµ `panics`: РІС‹Р±РѕСЂ РѕС€РёР±РєРё РЅРµ Р·Р°РІРёСЃРёС‚ РѕС‚ СЂР°СЃРїРёСЃР°РЅРёСЏ.
-            assert_eq!(
-                err,
-                GraphError::TaskFailed {
-                    task: "boom".into(),
-                    message: "disk on fire".into()
-                }
+            assert!(
+                matches!(&err, GraphError::TaskFailed { task, message, .. }
+                    if task == "boom" && message == "disk on fire"),
+                "{err:?}"
             );
             let mut log = log.lock().unwrap().clone();
             log.sort_unstable();
@@ -360,12 +350,10 @@ fn panic_is_reported_with_task_name_and_pool_survives() {
     let mut res = Resources::new();
     res.insert(Input(0));
     let err = graph.run(&pool, &mut res).unwrap_err();
-    assert_eq!(
-        err,
-        GraphError::TaskPanicked {
-            task: "panics".into(),
-            message: "bad frame".into()
-        }
+    assert!(
+        matches!(&err, GraphError::TaskPanicked { task, message, .. }
+            if task == "panics" && message == "bad frame"),
+        "{err:?}"
     );
     // РћС‚СЂР°РІР»РµРЅРЅС‹Р№ РїР°РЅРёРєРѕР№ СЃР»РѕС‚ РѕСЃС‚Р°С‘С‚СЃСЏ РґРѕСЃС‚СѓРїРЅС‹Рј, РїСѓР» Р¶РёРІ.
     assert_eq!(res.get::<Input>().unwrap().0, 0);
@@ -386,12 +374,10 @@ fn task_errors_convert() {
     let mut g = FrameGraph::builder();
     g.task("custom", |t| t, |_| -> Result<(), MyError> { Err(MyError) });
     let err = g.build().unwrap().run(&pool(1), &mut Resources::new());
-    assert_eq!(
-        err,
-        Err(GraphError::TaskFailed {
-            task: "custom".into(),
-            message: "my error".into()
-        })
+    assert!(
+        matches!(&err, Err(GraphError::TaskFailed { task, message, .. })
+            if task == "custom" && message == "my error"),
+        "{err:?}"
     );
 }
 

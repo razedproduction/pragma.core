@@ -4,6 +4,7 @@
 pub enum SysError {
     /// Системный вызов `op` вернул ошибку ОС `code` (`GetLastError` / `errno`).
     #[error("{op} failed: OS error {code}")]
+    #[non_exhaustive]
     Os {
         /// Какой вызов.
         op: &'static str,
@@ -12,6 +13,7 @@ pub enum SysError {
     },
     /// ОС отказала в правах (например, повышение приоритета на Linux без `CAP_SYS_NICE`).
     #[error("{op}: permission denied (OS error {code})")]
+    #[non_exhaustive]
     PermissionDenied {
         /// Какой вызов.
         op: &'static str,
@@ -20,6 +22,7 @@ pub enum SysError {
     },
     /// Номер ядра вне поддерживаемого диапазона `0..limit`.
     #[error("core {core} is out of range 0..{limit}")]
+    #[non_exhaustive]
     InvalidCore {
         /// Запрошенное ядро.
         core: usize,
@@ -31,6 +34,7 @@ pub enum SysError {
     InvalidName,
     /// Операция не поддерживается на этой платформе.
     #[error("{op} is not supported on this platform")]
+    #[non_exhaustive]
     Unsupported {
         /// Какая операция.
         op: &'static str,

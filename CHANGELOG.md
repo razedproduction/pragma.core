@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-14
+
+### Changed (ломающее) — M6a «Ревью публичного API» (DECISIONS #42)
+
+- `pragma_sync`: наружу только `CountLatch`, `AtomicCounter`, `SyncError`, `TaskLabel`,
+  `current_label`. `ArrivalCounter`, `Parker`/`Unparker`, `scope`/`TaskScope`/`ScopedTask`/
+  `StackSlot`, `join_on_stack`/`StackJob`/`JoinLatch`/`NO_OWNER`, `run_labeled`,
+  `Backoff`/`CachePadded` перенесены в скрытый `pragma_sync::__private` (вне semver).
+- `pragma_core::sync` — модуль со стабильной частью `pragma_sync` вместо re-export крейта.
+- Убран re-export `pragma_base::tracing`: подписчика ставьте через свою зависимость `tracing` 0.1.
+- Варианты ошибок с полями (`BaseError`, `SysError`, `JobsError`, `JobError`, `GraphError`,
+  `AsyncError`) — `#[non_exhaustive]`: в шаблонах нужен `..`, собрать вне крейта нельзя.
+- `pragma_graph::TaskResult` запечатан (реализован для `()` и `Result<(), E>`).
+- Внутренние крейты зависят друг от друга точной версией (`=0.6.0`).
+
+### Added
+
+- `impl Debug for HandlePool<T>` (`T: Debug`); lint `missing_debug_implementations` на весь workspace.
+- Feature `puffin` и re-export `pragma_core::puffin` явно объявлены вне гарантий semver.
+
+### Removed
+
+- Неиспользуемая зависимость workspace `crossbeam-channel`.
+
 ### Changed
 
 - Вложенный `join` быстрее на ~10%: после push второй ветви воркер проверяет спящих без

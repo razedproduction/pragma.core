@@ -101,7 +101,7 @@ pub use pragma_sys as sys;
 pub fn labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> R {
     #[cfg(debug_assertions)]
     let _watch = pool::watch(kind, name);
-    pragma_sync::run_labeled(kind, name, f)
+    pragma_sync::__private::run_labeled(kind, name, f)
 }
 
 /// Приоритет задачи пула, которую исполняет текущий поток; `None` — поток сейчас не

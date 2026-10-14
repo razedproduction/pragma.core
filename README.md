@@ -1,7 +1,7 @@
 # pragma.core
 
 [![CI](https://github.com/razedproduction/pragma.core/actions/workflows/ci.yml/badge.svg)](https://github.com/razedproduction/pragma.core/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.5.0-informational)
+![Version](https://img.shields.io/badge/version-0.6.0-informational)
 ![MSRV](https://img.shields.io/badge/MSRV-1.88-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Status](https://img.shields.io/badge/status-pre--1.0-yellow)
@@ -18,11 +18,12 @@ of it without each inventing their own thread pool.
 
 ## Status
 
-**0.5.0 — feature-complete for 1.0, API not yet frozen.** Milestones M0–M5 are done: the
+**0.6.0 — feature-complete for 1.0, public API reviewed.** Milestones M0–M5 are done: the
 work-stealing job system, the per-frame task graph, async tasks, observability, tuning and
-the hardening pass (determinism suite, benchmark gate and semver checks in CI). The next
-milestone, M6, is the 1.0 API review and the crates.io release. Until then, minor
-versions may break the API; every break is listed in the [changelog](CHANGELOG.md).
+the hardening pass (determinism suite, benchmark gate and semver checks in CI). M6 is in
+progress: the 1.0 API review is done (M6a); documentation and the crates.io release are
+next. Until 1.0, minor versions may break the API; every break is listed in the
+[changelog](CHANGELOG.md).
 See the [roadmap](docs/roadmap.md).
 
 ## Features
@@ -30,7 +31,7 @@ See the [roadmap](docs/roadmap.md).
 | Area | Crate | Facade |
 |---|---|---|
 | Typed errors, generational handles (`Handle`, `HandlePool`), simulation ticks | `pragma_base` | `base` |
-| Sync primitives: latches, parking, counters, scoped and on-stack jobs, task labels | `pragma_sync` | `sync` |
+| Sync primitives: latches, counters, task labels (plus the scheduler's internal building blocks) | `pragma_sync` | `sync` |
 | Platform layer: thread names, priorities, core affinity (Windows/Linux) | `pragma_sys` | `sys` |
 | Work-stealing pool: `join`, `scope`, `spawn`, `parallel_for`, `parallel_reduce`, priorities | `pragma_jobs` | `jobs` |
 | Per-frame task graph with declared resource access, validated before the first frame | `pragma_graph` | `graph` |

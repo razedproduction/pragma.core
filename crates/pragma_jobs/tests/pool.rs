@@ -68,12 +68,9 @@ fn panic_becomes_error_and_worker_survives() {
         .spawn(Priority::Frame, || -> u32 { panic!("boom") })
         .join()
         .unwrap_err();
-    assert_eq!(
-        err,
-        JobError::Panicked {
-            job: "spawn".into(),
-            message: "boom".into()
-        }
+    assert!(
+        matches!(&err, JobError::Panicked { job, message, .. } if job == "spawn" && message == "boom"),
+        "{err:?}"
     );
     // Единственный воркер жив и продолжает работать.
     assert_eq!(pool.spawn(Priority::Frame, || 7).join().unwrap(), 7);

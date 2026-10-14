@@ -187,11 +187,11 @@ impl JoinLatch<'_> {
 /// `owner` — индекс владельца для пробуждения (или [`NO_OWNER`]).
 ///
 /// ```
-/// use pragma_sync::join_on_stack;
+/// use pragma_sync::__private::{NO_OWNER, join_on_stack};
 ///
 /// let mut sum = 0_u64;
 /// let ((), b) = join_on_stack(
-///     pragma_sync::NO_OWNER,
+///     NO_OWNER,
 ///     || (1..=10_u64).sum::<u64>(),
 ///     |job| {
 ///         sum = 100;          // первая ветвь

@@ -18,6 +18,7 @@ pragma_sync = { workspace = true }
 pragma_sys = { workspace = true }
 crossbeam-deque = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 puffin = { workspace = true, optional = true }
 
 [dev-dependencies]

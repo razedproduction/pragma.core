@@ -6,12 +6,14 @@ use std::any::Any;
 pub enum JobsError {
     /// Некорректная конфигурация пула.
     #[error("invalid pool config: {reason}")]
+    #[non_exhaustive]
     InvalidConfig {
         /// Что именно не так.
         reason: &'static str,
     },
     /// ОС отказала в создании рабочего потока.
     #[error("failed to spawn worker thread `{name}`")]
+    #[non_exhaustive]
     SpawnFailed {
         /// Имя потока.
         name: String,
@@ -32,6 +34,7 @@ pub enum JobsError {
 pub enum JobError {
     /// Задача запаниковала; паника перехвачена, воркер продолжает работу.
     #[error("job `{job}` panicked: {message}")]
+    #[non_exhaustive]
     Panicked {
         /// Какая задача (например, `spawn`, `join b`, `parallel_for chunk`).
         job: String,
@@ -42,6 +45,7 @@ pub enum JobError {
     ///
     /// [`ShutdownPolicy::Cancel`]: crate::ShutdownPolicy::Cancel
     #[error("job `{job}` was cancelled before it ran")]
+    #[non_exhaustive]
     Cancelled {
         /// Какая задача.
         job: String,

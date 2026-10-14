@@ -14,6 +14,7 @@ pragma_jobs = { workspace = true }
 async-task = { workspace = true }
 futures-lite = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

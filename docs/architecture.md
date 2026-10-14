@@ -24,7 +24,7 @@ L3  pragma_graph    граф кадра            pragma_async   async-зада
 L2  pragma_jobs     пул, work-stealing, join/scope/parallel_for
 L1  pragma_sync     латчи, парковка, backoff, метки задач     ← unsafe (под Miri + loom)
     pragma_sys      имена/приоритеты потоков, affinity        ← unsafe только FFI (DECISIONS #27)
-L0  pragma_base     ошибки, Handle/HandlePool, Tick, tracing
+L0  pragma_base     ошибки, Handle/HandlePool, Tick
 ```
 
 Внешние зависимости: только pure Rust ([`deny.toml`](../deny.toml)). Все версии лежат в
@@ -67,7 +67,7 @@ L0  pragma_base     ошибки, Handle/HandlePool, Tick, tracing
   (приоритет/affinity, регистрация в эпохе crossbeam, контекст воркера). Одноразовые
   выделения потока не попадают в кадры, даже если воркерам не хватает ядер (DECISIONS #39).
 - **`join`** (DECISIONS #30): вторая ветвь — задача на стеке с латчем
-  (`pragma_sync::join_on_stack`). Участник пула (воркер или главный поток во внешнем слоте)
+  (`pragma_sync::__private::join_on_stack`). Участник пула (воркер или главный поток во внешнем слоте)
   кладёт её в свою LIFO-очередь, исполняет первую ветвь и снимает задачу обратно: если её не
   украли — исполняет сам, без атомарных RMW и аллокаций. Украденную ждёт, помогая; без работы —
   объявляет сон в латче и паркуется на своём `Parker` (у внешних слотов они свои), вор будит его

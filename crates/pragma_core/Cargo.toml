@@ -16,7 +16,8 @@ default = ["jobs", "graph", "async"]
 jobs = ["dep:pragma_jobs"]
 graph = ["jobs", "dep:pragma_graph"]
 async = ["jobs", "dep:pragma_async"]
-# Профайлер кадра puffin: области пула и задач графа (DECISIONS.md #29).
+# Профайлер кадра puffin: области пула и задач графа (DECISIONS.md #29). Вне гарантий semver:
+# подъём версии puffin — минорный релиз pragma_core (DECISIONS.md #42).
 puffin = ["jobs", "dep:puffin", "pragma_jobs/puffin", "pragma_graph?/puffin"]
 
 [dependencies]

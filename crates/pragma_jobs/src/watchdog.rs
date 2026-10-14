@@ -9,8 +9,6 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use pragma_base::tracing;
-
 /// Сколько байт имени задачи попадает в предупреждение.
 const NAME_CAP: usize = 64;
 

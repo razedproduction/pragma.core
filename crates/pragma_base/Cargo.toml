@@ -1,6 +1,6 @@
 [package]
 name = "pragma_base"
-description = "pragma.core L0: errors, generational handles, ticks, logging"
+description = "pragma.core L0: errors, generational handles, ticks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,6 @@ repository.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
