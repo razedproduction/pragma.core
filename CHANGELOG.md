@@ -17,6 +17,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioni
 - README sections "MSRV policy" and "Versioning": MSRV 1.88, raised only in a minor release with
   a changelog line (DECISIONS #44); lockstep versions, exact internal dependencies, what is
   outside semver, how breaking changes are handled before and after 1.0. No API changes.
+- Rustdoc examples (doctests) for every public type and free function and the main methods of all
+  crates, and the section "Integrating into an engine" in the `pragma_core` crate docs: pool
+  ownership and worker count, the frame graph in the game loop, `poll_ready` instead of `wait`,
+  background priorities, the panic hook, `panic = "abort"`, shutdown order and determinism, with a
+  compiled engine skeleton (DECISIONS #46). No API changes.
 
 ## [0.6.0] — 2026-10-14
 

@@ -16,6 +16,30 @@ struct JobState<T> {
 /// A handle to a task started via [`ThreadPool::spawn`].
 ///
 /// Dropping the handle does not cancel the task: it runs to completion and the result is discarded.
+///
+/// ```
+/// use pragma_jobs::{JobError, PoolConfig, Priority, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+/// let mesh = pool.spawn_named("bake navmesh", Priority::Background, || vec![0_u8; 64]);
+///
+/// // ... the frame goes on; poll without blocking ...
+/// let _ready = mesh.is_finished();
+///
+/// assert_eq!(mesh.join()?.len(), 64);
+///
+/// let broken = pool.spawn_named("bake lightmap", Priority::Background, || -> u8 {
+///     panic!("no lights")
+/// });
+/// match broken.join() {
+///     Err(JobError::Panicked { job, message, .. }) => {
+///         assert_eq!(job, "bake lightmap");
+///         assert_eq!(message, "no lights");
+///     }
+///     other => panic!("unexpected {other:?}"),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[must_use = "without join() the task's result and panic are lost"]
 pub struct JobHandle<T> {
     state: Arc<JobState<T>>,
@@ -89,6 +113,18 @@ impl<T> Drop for Completer<T> {
 
 impl ThreadPool {
     /// Starts a `'static` task with priority `priority` and returns a handle to the result.
+    ///
+    /// For work that borrows local data use [`scope`](Self::scope) instead.
+    ///
+    /// ```
+    /// use pragma_jobs::{PoolConfig, Priority, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// let path = String::from("level1.bin");
+    /// let handle = pool.spawn(Priority::Background, move || path.len());
+    /// assert_eq!(handle.join()?, 10);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn spawn<F, T>(&self, priority: Priority, f: F) -> JobHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -99,6 +135,17 @@ impl ThreadPool {
 
     /// Like [`spawn`](Self::spawn), but with a task name: it goes into the task label
     /// ([`current_task`](crate::current_task), watchdog) and into [`JobError::Panicked`].
+    ///
+    /// ```
+    /// use pragma_jobs::{PoolConfig, Priority, ThreadPool, current_task};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let handle = pool.spawn_named("decompress", Priority::Normal, || {
+    ///     current_task(|task| task.map(|t| (t.kind(), t.name().to_owned())))
+    /// });
+    /// assert_eq!(handle.join()?, Some(("spawn", String::from("decompress"))));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn spawn_named<F, T>(&self, name: &'static str, priority: Priority, f: F) -> JobHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,

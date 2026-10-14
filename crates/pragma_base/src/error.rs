@@ -1,4 +1,20 @@
 /// Errors of the L0 primitives.
+///
+/// The enum and its struct variants are `#[non_exhaustive]`: match with `..` and a wildcard arm.
+///
+/// ```
+/// use pragma_base::{BaseError, HandlePool};
+///
+/// let mut pool = HandlePool::new();
+/// let h = pool.insert(1_u8)?;
+/// pool.remove(h)?;
+/// match pool.remove(h) {
+///     Err(BaseError::StaleHandle { index, .. }) => assert_eq!(index, h.index()),
+///     Err(other) => return Err(other),
+///     Ok(_) => unreachable!("the handle was already removed"),
+/// }
+/// # Ok::<(), BaseError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BaseError {

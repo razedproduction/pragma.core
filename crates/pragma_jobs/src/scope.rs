@@ -59,6 +59,28 @@ impl ScopeData<'_> {
 ///
 /// `Copy`: it is passed into closures by value, so tasks can spawn new tasks
 /// in the same scope.
+///
+/// ```
+/// use pragma_jobs::{PoolConfig, ThreadPool};
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+/// let counter = AtomicUsize::new(0);
+/// let visited = &counter;
+/// pool.scope(|s| {
+///     for _ in 0..4 {
+///         // `s` is `Copy`: a task can spawn more tasks into the same scope.
+///         s.spawn(move || {
+///             visited.fetch_add(1, Ordering::Relaxed);
+///             s.spawn(move || {
+///                 visited.fetch_add(1, Ordering::Relaxed);
+///             });
+///         });
+///     }
+/// })?;
+/// assert_eq!(counter.into_inner(), 8); // `scope` waited for the nested tasks too
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct Scope<'scope, 'env: 'scope> {
     inner: &'scope TaskScope<'scope, 'env, ScopeData<'scope>>,
     env: PhantomData<&'env mut &'env ()>,
@@ -83,6 +105,9 @@ impl std::fmt::Debug for Scope<'_, '_> {
 impl<'scope> Scope<'scope, '_> {
     /// Spawns a scope task. A task panic is caught; the first one
     /// is returned from [`ThreadPool::scope`] as an error.
+    ///
+    /// See the [`Scope`] example; for a fixed slice, [`ThreadPool::parallel_for`] does the
+    /// splitting for you.
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'scope,
@@ -123,6 +148,37 @@ impl ThreadPool {
     /// Returns only when all tasks of the scope have finished; while waiting it runs
     /// pool work. A panic in `f` or in any task gives `Err(JobError::Panicked)`
     /// (the first one caught is returned); the other tasks still run to completion.
+    ///
+    /// Tasks inherit the priority of the calling task; outside the pool (the main thread) they are
+    /// [`Priority::Frame`], and subtasks of a [`Priority::Background`] task are
+    /// [`Priority::Normal`] (so they do not wait for the background limit their parent holds).
+    /// The same applies to `join` and `parallel_*`.
+    ///
+    /// ```
+    /// use pragma_jobs::{JobError, PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// let positions = vec![1.0_f32; 256];
+    /// let mut velocities = vec![0.0_f32; 256];
+    ///
+    /// let total = pool.scope(|s| {
+    ///     // Disjoint mutable borrows of the caller's data, no `Arc`, no `'static`.
+    ///     for (pos, vel) in positions.chunks(64).zip(velocities.chunks_mut(64)) {
+    ///         s.spawn(move || vel.iter_mut().zip(pos).for_each(|(v, p)| *v = -p));
+    ///     }
+    ///     positions.len() // the value returned by the scope body
+    /// })?;
+    /// assert_eq!(total, 256);
+    /// assert!(velocities.iter().all(|&v| v == -1.0));
+    ///
+    /// // One task panics: the scope still waits for the rest, then reports the panic.
+    /// let result = pool.scope(|s| {
+    ///     s.spawn(|| panic!("bad chunk"));
+    ///     s.spawn(|| ());
+    /// });
+    /// assert!(matches!(result, Err(JobError::Panicked { .. })));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn scope<'env, F, R>(&self, f: F) -> Result<R, JobError>
     where
         F: for<'scope> FnOnce(Scope<'scope, 'env>) -> R,
@@ -166,6 +222,27 @@ impl ThreadPool {
     }
     /// Fork-join: `a` runs on the current thread, `b` in the pool (or here too, if nobody
     /// stole it). Nested `join`s do not deadlock with any number of workers.
+    ///
+    /// `join` does not allocate; it is the cheapest way to split recursive work in two. If both
+    /// branches panic, the panic of `a` is returned.
+    ///
+    /// ```
+    /// use pragma_jobs::ThreadPool;
+    ///
+    /// fn sum(pool: &ThreadPool, data: &[u64]) -> u64 {
+    ///     if data.len() <= 1024 {
+    ///         return data.iter().sum();
+    ///     }
+    ///     let (left, right) = data.split_at(data.len() / 2);
+    ///     let (a, b) = pool.join(|| sum(pool, left), || sum(pool, right)).unwrap_or((0, 0));
+    ///     a + b
+    /// }
+    ///
+    /// let pool = ThreadPool::new(pragma_jobs::PoolConfig::default().with_workers(1))?;
+    /// let data: Vec<u64> = (1..=100_000).collect();
+    /// assert_eq!(sum(&pool, &data), 5_000_050_000); // nested joins on one worker do not deadlock
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn join<A, B, RA, RB>(&self, a: A, b: B) -> Result<(RA, RB), JobError>
     where
         A: FnOnce() -> RA,
@@ -212,6 +289,20 @@ impl ThreadPool {
     }
 
     /// Applies `f` to every element in parallel.
+    ///
+    /// The slice is split into chunks by `grain` (see [`Grain`]); a panic in any element is
+    /// returned as [`JobError::Panicked`] after all chunks have finished.
+    ///
+    /// ```
+    /// use pragma_jobs::{Grain, PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// let mut particles = vec![(0.0_f32, 1.0_f32); 10_000]; // (position, velocity)
+    /// let dt = 0.5;
+    /// pool.parallel_for(&mut particles, Grain::Auto, |(pos, vel)| *pos += *vel * dt)?;
+    /// assert!(particles.iter().all(|&(pos, _)| pos == 0.5));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn parallel_for<T, F>(&self, items: &mut [T], grain: Grain, f: F) -> Result<(), JobError>
     where
         T: Send,
@@ -222,6 +313,23 @@ impl ThreadPool {
 
     /// Processes chunks of `items` in parallel; `f` receives the offset of the chunk's first element
     /// and the chunk itself. For the split, see [`Grain`].
+    ///
+    /// Use it when an element needs its index, or when per-chunk setup (a scratch buffer, a lock)
+    /// should be paid once per chunk rather than once per element.
+    ///
+    /// ```
+    /// use pragma_jobs::{Grain, PoolConfig, ThreadPool};
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+    /// let mut ids = vec![0_usize; 1000];
+    /// pool.parallel_for_chunks(&mut ids, Grain::Fixed(100), |offset, chunk| {
+    ///     for (i, id) in chunk.iter_mut().enumerate() {
+    ///         *id = offset + i;
+    ///     }
+    /// })?;
+    /// assert!(ids.iter().enumerate().all(|(i, &id)| i == id));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn parallel_for_chunks<T, F>(
         &self,
         items: &mut [T],
@@ -250,6 +358,23 @@ impl ThreadPool {
     ///
     /// The split does not depend on the number of workers, so even a non-associative fold
     /// (an `f32`/`f64` sum) gives the same result on any pool. `None` means an empty input.
+    ///
+    /// ```
+    /// use pragma_jobs::{Grain, PoolConfig, ThreadPool};
+    ///
+    /// let masses: Vec<f32> = (0..10_000).map(|i| 0.1 + i as f32 * 1e-3).collect();
+    /// let total = |workers| -> Result<Option<f32>, Box<dyn std::error::Error>> {
+    ///     let pool = ThreadPool::new(PoolConfig::default().with_workers(workers))?;
+    ///     Ok(pool.parallel_reduce(&masses, Grain::Auto, |_, c| c.iter().sum::<f32>(), |a, b| a + b)?)
+    /// };
+    /// // Bit-identical on 1 and 4 workers, although `f32` addition is not associative.
+    /// assert_eq!(total(1)?.map(f32::to_bits), total(4)?.map(f32::to_bits));
+    ///
+    /// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+    /// let empty: &[f32] = &[];
+    /// assert_eq!(pool.parallel_reduce(empty, Grain::Auto, |_, c| c.len(), |a, b| a + b)?, None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn parallel_reduce<T, R, M, C>(
         &self,
         items: &[T],

@@ -4,6 +4,20 @@ use crate::AsyncError;
 const MAX_BLOCKING_THREADS: usize = 256;
 
 /// Executor configuration: the size of the blocking pool and its queue.
+///
+/// ```
+/// use pragma_async::AsyncConfig;
+///
+/// // Streaming from a slow disk: few threads, a deep queue.
+/// let config = AsyncConfig::default()
+///     .with_blocking_threads(2)
+///     .with_blocking_capacity(4096)
+///     .with_name_prefix("io");
+/// assert!(config.clone().validate().is_ok());
+///
+/// // The queue must hold at least one task per thread.
+/// assert!(AsyncConfig::default().with_blocking_threads(8).with_blocking_capacity(4).validate().is_err());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsyncConfig {
     blocking_threads: usize,

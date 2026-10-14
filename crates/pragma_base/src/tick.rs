@@ -3,6 +3,19 @@ use crate::BaseError;
 /// Tick number of the fixed simulation step.
 ///
 /// The simulation works in ticks rather than `Instant::now()`; this is the basis of determinism and replays.
+///
+/// ```
+/// use pragma_base::Tick;
+///
+/// let mut tick = Tick::ZERO;
+/// for _ in 0..3 {
+///     // ... run one fixed step of the simulation ...
+///     tick = tick.next()?;
+/// }
+/// assert_eq!(tick, Tick::new(3));
+/// assert!(Tick::new(u64::MAX).next().is_err()); // no silent wrap-around
+/// # Ok::<(), pragma_base::BaseError>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Tick(u64);
 

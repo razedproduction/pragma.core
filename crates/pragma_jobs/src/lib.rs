@@ -106,6 +106,16 @@ pub fn labeled<R>(kind: &'static str, name: &str, f: impl FnOnce() -> R) -> R {
 
 /// The priority of the pool task the current thread is running; `None` if the thread is not
 /// running a pool task right now (for example the main thread in a `scope` body or outside the pool).
+///
+/// ```
+/// use pragma_jobs::{PoolConfig, Priority, ThreadPool, current_priority};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+/// assert_eq!(current_priority(), None);
+/// let inside = pool.spawn(Priority::Normal, current_priority).join()?;
+/// assert_eq!(inside, Some(Priority::Normal));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[must_use]
 pub fn current_priority() -> Option<Priority> {
     pool::current_priority()

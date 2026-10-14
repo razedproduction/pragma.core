@@ -9,6 +9,16 @@ use crate::resources::ResourceKey;
 
 /// Maximum number of tasks in a graph. Reachability at build time is an `n × n` bit matrix
 /// (`n²/8` bytes): at the limit that is 32 MiB, not gigabytes on an accidentally huge input.
+///
+/// ```
+/// use pragma_graph::{FrameGraph, GraphError, MAX_TASKS};
+///
+/// let mut g = FrameGraph::builder();
+/// for i in 0..=MAX_TASKS {
+///     g.task(format!("t{i}"), |t| t, |_| ());
+/// }
+/// assert!(matches!(g.build(), Err(GraphError::TooLarge { .. })));
+/// ```
 pub const MAX_TASKS: usize = 16_384;
 
 /// Maximum number of edges before transitive reduction: explicit `before`/`after` and the edges of

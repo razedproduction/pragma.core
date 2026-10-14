@@ -50,6 +50,20 @@ pub use error::SysError;
 ///
 /// On Linux without privileges `nice` cannot be moved back to a lower value either: after `Low`,
 /// a call with `Normal` returns [`SysError::PermissionDenied`].
+///
+/// ```
+/// use pragma_sys::{ThreadPriority, current_thread_priority, set_current_thread_priority};
+///
+/// std::thread::spawn(|| {
+///     assert_eq!(current_thread_priority()?, ThreadPriority::Normal);
+///     set_current_thread_priority(ThreadPriority::Low)?;
+///     assert_eq!(current_thread_priority()?, ThreadPriority::Low);
+///     Ok::<(), pragma_sys::SysError>(())
+/// })
+/// .join()
+/// .map_err(|_| "thread panicked")??;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum ThreadPriority {
@@ -67,6 +81,15 @@ pub enum ThreadPriority {
 /// `pragma_jobs` pool threads are already named via `std::thread::Builder`; this function is for
 /// threads created without a `Builder` (for example the main one). The name is truncated at a
 /// character boundary: to 15 bytes on Linux (a kernel limit), to 256 UTF-16 units on Windows.
+///
+/// ```
+/// use pragma_sys::{SysError, set_current_thread_name};
+///
+/// // Typically the first line of `main`, so the main thread is recognizable in a profiler.
+/// set_current_thread_name("main-loop")?;
+/// assert_eq!(set_current_thread_name("bad\0name"), Err(SysError::InvalidName));
+/// # Ok::<(), SysError>(())
+/// ```
 pub fn set_current_thread_name(name: &str) -> Result<(), SysError> {
     if name.contains('\0') {
         return Err(SysError::InvalidName);
@@ -75,12 +98,36 @@ pub fn set_current_thread_name(name: &str) -> Result<(), SysError> {
 }
 
 /// Sets the priority of the current thread.
+///
+/// Lowering never needs privileges; raising may give [`SysError::PermissionDenied`], which an
+/// application usually logs and ignores:
+///
+/// ```
+/// use pragma_sys::{SysError, ThreadPriority, set_current_thread_priority};
+///
+/// std::thread::spawn(|| match set_current_thread_priority(ThreadPriority::High) {
+///     Ok(()) | Err(SysError::PermissionDenied { .. }) => {}
+///     Err(other) => eprintln!("cannot raise the priority: {other}"),
+/// })
+/// .join()
+/// .map_err(|_| "thread panicked")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn set_current_thread_priority(priority: ThreadPriority) -> Result<(), SysError> {
     imp::set_current_thread_priority(priority)
 }
 
 /// The priority of the current thread, mapped to [`ThreadPriority`] (any value below
 /// normal is `Low`, any value above is `High`).
+///
+/// ```
+/// use pragma_sys::{ThreadPriority, current_thread_priority};
+///
+/// // A freshly spawned thread starts with the normal priority.
+/// let priority = std::thread::spawn(current_thread_priority).join().map_err(|_| "panicked")??;
+/// assert_eq!(priority, ThreadPriority::Normal);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn current_thread_priority() -> Result<ThreadPriority, SysError> {
     imp::current_thread_priority()
 }
@@ -89,6 +136,21 @@ pub fn current_thread_priority() -> Result<ThreadPriority, SysError> {
 ///
 /// On Windows, cores of the first processor group are supported (`core < 64`); on Linux,
 /// `core < 1024` (`CPU_SETSIZE`); a core out of range is [`SysError::InvalidCore`].
+///
+/// ```
+/// use pragma_sys::{SysError, current_core, pin_current_thread};
+///
+/// std::thread::spawn(|| {
+///     pin_current_thread(0)?;
+///     std::thread::yield_now(); // the move happens at the next scheduling point
+///     assert_eq!(current_core(), Some(0));
+///     assert!(matches!(pin_current_thread(1 << 20), Err(SysError::InvalidCore { .. })));
+///     Ok::<(), SysError>(())
+/// })
+/// .join()
+/// .map_err(|_| "thread panicked")??;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn pin_current_thread(core: usize) -> Result<(), SysError> {
     imp::pin_current_thread(core)
 }
@@ -97,6 +159,12 @@ pub fn pin_current_thread(core: usize) -> Result<(), SysError> {
 ///
 /// Without pinning, the value may change right after the call; it is good for diagnostics and
 /// for checking [`pin_current_thread`].
+///
+/// ```
+/// if let Some(core) = pragma_sys::current_core() {
+///     println!("running on logical core {core}");
+/// }
+/// ```
 #[must_use]
 pub fn current_core() -> Option<usize> {
     imp::current_core()

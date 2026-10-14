@@ -3,6 +3,25 @@ use std::any::Any;
 /// Errors of async tasks and the executor.
 ///
 /// `Clone`/`PartialEq`, like `JobError`: task outcomes are sent between threads and compared.
+/// The enum and its struct variants are `#[non_exhaustive]`: match with `..` and a wildcard arm.
+///
+/// ```
+/// use pragma_async::{AsyncConfig, AsyncError, Executor};
+/// use pragma_jobs::{PoolConfig, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+/// let exec = Executor::new(&pool, AsyncConfig::default())?;
+/// drop(pool);
+/// assert!(!exec.is_alive());
+///
+/// // The pool has stopped: the task is cancelled instead of being queued forever.
+/// match exec.spawn_async(async { 42 }).wait() {
+///     Err(AsyncError::Cancelled) => {}
+///     Err(AsyncError::Panicked { message, .. }) => eprintln!("task failed: {message}"),
+///     other => panic!("unexpected {other:?}"),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AsyncError {

@@ -6,6 +6,27 @@ use pragma_jobs::JobError;
 /// frame errors ([`FrameGraph::run`]) are the first error of the task with the lowest registration
 /// index, so with identical failures the result does not depend on thread scheduling.
 ///
+/// The enum and its variants are `#[non_exhaustive]`: match with `..` and a wildcard arm. Inside a
+/// task, `?` on a `GraphError` (for example from [`TaskContext::read`]) passes it through unchanged.
+///
+/// ```
+/// use pragma_graph::{FrameGraph, GraphError};
+///
+/// struct Bodies;
+///
+/// let mut g = FrameGraph::builder();
+/// g.task("physics", |t| t.writes::<Bodies>(), |_| ());
+/// g.task("debug draw", |t| t.reads::<Bodies>(), |_| ());
+/// match g.build() {
+///     Err(GraphError::AmbiguousOrder { a, b, .. }) => {
+///         // Fix: `.after("physics")` on "debug draw", or `FrameGraph::builder().ordered()`.
+///         assert_eq!((a.as_str(), b.as_str()), ("physics", "debug draw"));
+///     }
+///     other => panic!("unexpected {other:?}"),
+/// }
+/// ```
+///
+/// [`TaskContext::read`]: crate::TaskContext::read
 /// [`FrameGraphBuilder::build`]: crate::FrameGraphBuilder::build
 /// [`FrameGraph::run`]: crate::FrameGraph::run
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

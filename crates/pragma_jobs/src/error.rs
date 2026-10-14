@@ -1,6 +1,17 @@
 use std::any::Any;
 
 /// Errors of the pool lifecycle (creation, configuration).
+///
+/// ```
+/// use pragma_jobs::{JobsError, PoolConfig, ThreadPool};
+///
+/// match ThreadPool::new(PoolConfig::default().with_workers(10_000)) {
+///     Err(JobsError::InvalidConfig { reason, .. }) => assert!(reason.contains("512")),
+///     Err(other) => return Err(other.into()),
+///     Ok(_) => unreachable!("10 000 workers is over the limit"),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum JobsError {
@@ -27,6 +38,24 @@ pub enum JobsError {
 ///
 /// Kept separate from [`JobsError`] (DECISIONS.md #13): a task outcome can be cloned, compared
 /// and sent between threads, while a pool creation error carries a `std::io::Error`.
+///
+/// The enum and its variants are `#[non_exhaustive]`: match with `..` and a wildcard arm.
+///
+/// ```
+/// use pragma_jobs::{JobError, PoolConfig, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(1))?;
+/// let result = pool.join(|| 1, || -> i32 { panic!("division by zero") });
+/// match result {
+///     Ok(_) => unreachable!(),
+///     Err(JobError::Panicked { job, message, .. }) => {
+///         assert_eq!(job, "join b");
+///         assert_eq!(message, "division by zero");
+///     }
+///     Err(other) => return Err(other.into()),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 ///
 /// [`JobHandle::join`]: crate::JobHandle::join
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

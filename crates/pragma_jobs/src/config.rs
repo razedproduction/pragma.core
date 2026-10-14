@@ -14,6 +14,36 @@ pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(5);
 const MAX_WORKERS: usize = 512;
 
 /// What to do with pending tasks when the pool is dropped.
+///
+/// ```
+/// use pragma_jobs::{JobError, PoolConfig, Priority, ShutdownPolicy, ThreadPool};
+///
+/// let pool = ThreadPool::new(
+///     PoolConfig::default().with_workers(1).with_shutdown(ShutdownPolicy::Cancel),
+/// )?;
+/// let (started_tx, started_rx) = std::sync::mpsc::channel();
+/// let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+/// let busy = pool.spawn(Priority::Normal, move || {
+///     started_tx.send(()).ok();
+///     release_rx.recv().ok(); // hold the only worker
+/// });
+/// started_rx.recv()?;
+/// let queued = pool.spawn(Priority::Normal, || 42);
+///
+/// // Drop the pool while its only worker is busy; release the worker once shutdown has begun.
+/// let spawner = pool.spawner();
+/// let dropping = std::thread::spawn(move || drop(pool));
+/// while spawner.is_alive() {
+///     std::thread::yield_now();
+/// }
+/// release_tx.send(())?;
+/// dropping.join().map_err(|_| "drop panicked")?;
+///
+/// // The running task finished, the queued one was dropped without running.
+/// assert!(busy.join().is_ok());
+/// assert!(matches!(queued.join(), Err(JobError::Cancelled { .. })));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum ShutdownPolicy {
@@ -26,6 +56,29 @@ pub enum ShutdownPolicy {
 }
 
 /// Thread pool configuration.
+///
+/// A builder: start from [`Default`] (cores − 1 workers, at least 1) and override what the engine
+/// needs. Errors are reported by [`validate`](Self::validate), which
+/// [`ThreadPool::new`](crate::ThreadPool::new) calls for you.
+///
+/// ```
+/// use std::time::Duration;
+/// use pragma_jobs::{PoolConfig, ShutdownPolicy, ThreadPool};
+/// use pragma_jobs::sys::ThreadPriority;
+///
+/// let config = PoolConfig::default()
+///     .with_workers(4)
+///     .with_name_prefix("game-worker")
+///     .with_background_limit(Some(1)) // streaming never takes more than one worker
+///     .with_shutdown(ShutdownPolicy::Cancel)
+///     .with_watchdog(Some(Duration::from_millis(500)))
+///     .with_thread_priority(Some(ThreadPriority::Normal));
+/// assert_eq!(config.background_limit(), 1);
+///
+/// let pool = ThreadPool::new(config)?;
+/// assert_eq!(pool.workers(), 4);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolConfig {
     workers: usize,
@@ -120,6 +173,15 @@ impl PoolConfig {
     /// Pins workers to logical cores: worker `i` is pinned to core
     /// `cores[i % cores.len()]` (`None`: no pinning, the OS decides). A pinning error is
     /// a warning in the log; the worker runs without it.
+    ///
+    /// ```
+    /// use pragma_jobs::PoolConfig;
+    ///
+    /// // Leave core 0 to the main thread, spread 4 workers over cores 1..=3.
+    /// let config = PoolConfig::default().with_workers(4).with_affinity(Some(vec![1, 2, 3]));
+    /// assert_eq!(config.core_for(0), Some(1));
+    /// assert_eq!(config.core_for(3), Some(1)); // wraps around
+    /// ```
     #[must_use]
     pub fn with_affinity(mut self, cores: Option<Vec<usize>>) -> Self {
         self.affinity = cores;
@@ -194,6 +256,21 @@ impl PoolConfig {
     }
 
     /// Validates the configuration before threads are started.
+    ///
+    /// Rules: `1..=512` workers, a non-zero stack size, a background limit in `1..=workers`, a
+    /// non-zero watchdog threshold, a non-empty affinity list.
+    ///
+    /// ```
+    /// use pragma_jobs::{JobsError, PoolConfig};
+    ///
+    /// let err = PoolConfig::default()
+    ///     .with_workers(2)
+    ///     .with_background_limit(Some(3))
+    ///     .validate()
+    ///     .unwrap_err();
+    /// assert!(matches!(err, JobsError::InvalidConfig { .. }));
+    /// assert!(PoolConfig::default().validate().is_ok());
+    /// ```
     pub fn validate(self) -> Result<Self, JobsError> {
         if self.workers == 0 {
             return Err(JobsError::InvalidConfig {

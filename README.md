@@ -19,8 +19,8 @@ of it without each inventing their own thread pool.
 work-stealing job system, the per-frame task graph, async tasks, observability, tuning and
 the hardening pass (determinism suite, benchmark gate and semver checks in CI). M6 is in
 progress: the 1.0 API review, the move of all documentation to English and the
-[MSRV](#msrv-policy) and [versioning](#versioning) policy are done; complete rustdoc, an
-embedding guide and the crates.io release are next. Until 1.0, minor versions may break the
+[MSRV](#msrv-policy) and [versioning](#versioning) policy, and complete rustdoc with examples
+and an embedding checklist are done; the crates.io release is next. Until 1.0, minor versions may break the
 API; every break is listed in the [changelog](CHANGELOG.md).
 See the [roadmap](docs/roadmap.md).
 
@@ -233,6 +233,10 @@ is 1.88 ([MSRV policy](#msrv-policy)). See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 
 ## Documentation
 
+- API reference: `cargo doc --open -p pragma_core` (docs.rs after the crates.io release). Every
+  public type and free function has an example; the crate page of `pragma_core` has the section
+  **"Integrating into an engine"**: pool ownership, the graph in the game loop, async results,
+  priorities, panics, shutdown order and determinism
 - [Architecture](docs/architecture.md): layers and the execution model
 - [Reliability rules](docs/reliability.md)
 - [Performance methodology and results](docs/perf.md)

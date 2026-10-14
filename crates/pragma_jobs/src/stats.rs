@@ -77,7 +77,8 @@ pub(crate) fn counter_set(threads: usize) -> CounterSet {
         .collect()
 }
 
-/// A metrics snapshot of one thread (or a group of external threads), see [`PoolStats`].
+/// A metrics snapshot of one thread (or a group of external threads), see [`PoolStats`] for an
+/// example.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThreadStats {
     executed: u64,
@@ -142,6 +143,30 @@ impl ThreadStats {
 /// Counters are cumulative since the pool was created; the difference of two snapshots gives the
 /// metrics for the interval. A snapshot reads atomics without locking and does not stop the workers,
 /// so the values of different counters may belong to slightly different moments.
+///
+/// A per-frame report in an engine's debug overlay:
+///
+/// ```
+/// use pragma_jobs::{Grain, PoolConfig, Priority, ThreadPool};
+///
+/// let pool = ThreadPool::new(PoolConfig::default().with_workers(2))?;
+/// let mut data = vec![0_u32; 4096];
+///
+/// let before = pool.stats();
+/// pool.parallel_for(&mut data, Grain::Fixed(512), |x| *x += 1)?; // "the frame"
+/// let after = pool.stats();
+///
+/// let tasks = after.executed() - before.executed();
+/// assert!(tasks >= 8); // 8 chunks (+ the scope bookkeeping, if any)
+/// for (i, (now, then)) in after.workers().iter().zip(before.workers()).enumerate() {
+///     let busy = now.executed() - then.executed();
+///     let idle = now.idle() - then.idle();
+///     println!("worker {i}: {busy} tasks, idle {idle:?}, {} queued", now.queued());
+/// }
+/// println!("main thread helped with {} tasks", after.external().executed() - before.external().executed());
+/// assert_eq!(after.global_queued(Priority::Background), 0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolStats {
     workers: Vec<ThreadStats>,
